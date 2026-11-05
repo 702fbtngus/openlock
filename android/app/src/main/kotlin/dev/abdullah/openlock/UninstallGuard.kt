@@ -3,16 +3,24 @@ package dev.abdullah.openlock
 /** One node of the active window's accessibility tree: its resource id (e.g.
  *  `com.android.settings:id/entity_header_title`) and its visible text or
  *  content description. */
-data class ScreenNode(val viewId: String?, val text: String?)
+data class ScreenNode(
+    val viewId: String?,
+    val text: String?,
+    val className: String? = null,
+    val checkable: Boolean = false,
+    val clickable: Boolean = false,
+    // Set only for toolbar descendants, never preference-row titles/headings.
+    val inToolbar: Boolean = false,
+)
 
 /**
  * Decides whether the active window is an OS screen *about OpenLock itself*
  * that could remove it: its App info page (and sub-pages), its uninstall
- * confirmation, or the device-admin deactivation screen naming it. Mirror of
- * the Dart `UninstallGuard`.
+ * confirmation, or the device-admin deactivation screen naming it. Also guards
+ * its accessibility-service details and Special access (including other apps).
  *
- * Screens are identified by what they show, never by activity class alone:
- * the same Settings activities and installer dialogs serve every app, and
+ * Single-app screens are identified by what they show; generic activity names
+ * alone cannot identify an app. The same Settings activities serve every app, and
  * lists that merely contain OpenLock's row (Apps list, Settings search
  * results, the device-admin list) must not match.
  */
@@ -29,6 +37,114 @@ object UninstallGuard {
     )
 
     private const val DEVICE_ADMIN_ADD_CLASS = "deviceadminadd"
+
+    private val PAGE_TITLE_IDS = setOf("action_bar_title", "toolbar_title", "collapsing_toolbar_title")
+    private val TOGGLE_IDS = setOf("switch_widget", "switch_bar", "switchbar", "switch_text", "main_switch_bar")
+
+    // Exact screen names, not "accessibility"/"specialaccess" substrings:
+    // DeviceAdminSettings and generic ManageApplications must stay unguarded.
+    private val ACCESSIBILITY_DETAILS = setOf(
+        "toggleaccessibilityservicepreferencefragment", "accessibilityservicedetails",
+    )
+    private val SPECIAL_ACCESS_SCREENS = setOf(
+        "specialaccesssettings", "specialaccess", "specialappaccesssettings",
+        "drawoverlaysettings", "drawoverlaydetails",
+        "overlaysettings", "appdrawoverlaysettings", "manageexternalstorage", "appmanageexternalstorage",
+        "manageexternalstoragedetails", "alarmsandreminders", "alarmsandremindersapp",
+        "alarmsandremindersdetails", "scheduleexactalarm",
+        "usageaccesssettings", "appusageaccesssettings", "usageaccessdetails",
+        "writesettings", "appwritesettings", "writesettingsdetails",
+        "notificationaccesssettings", "notificationaccessdetails",
+        "pictureinpicturesettings", "pictureinpicturedetails", "apppictureinpicturesettings",
+        "manageexternalsources", "manageappexternalsources", "externalsourcesdetails",
+        "highpowerapplications", "highpowerdetails", "premiumsmsaccess",
+        "zenaccesssettings", "zenaccessdetails", "zenaccessdetailsettings",
+        "turnscreenonsettings", "turnscreenondetails", "appturnscreenonsettings",
+        "interactacrossprofilessettings", "interactacrossprofilesdetails",
+        "unrestricteddataaccess", "vrlistenerssettings", "vrlistenersettings",
+        "mediamanagementapps", "appmediamanagementapps", "mediamanagementappsdetails",
+        "changewifistate", "changewifistatedetails", "longbackgroundtasks", "longbackgroundtasksapp",
+    )
+
+    // Fallback for generic SubSettings activities. Only toolbar titles qualify,
+    // so the same strings in Apps rows/search results cannot trigger a lock.
+    internal val specialAccessTitles = setOf(
+        "Special access", "Special app access", "특별한 접근", "특수 앱 액세스", "특별한 앱 액세스",
+        "Display over other apps", "Draw over other apps", "Appear on top",
+        "다른 앱 위에 표시", "다른 앱 위에 그리기", "Alarms & reminders", "Alarms and reminders",
+        "알람 및 리마인더", "알람 및 알림", "All files access", "모든 파일 접근", "모든 파일에 대한 접근",
+        "Usage access", "Usage data access", "사용정보 접근", "사용 정보 접근", "사용 데이터 접근",
+        "Change system settings", "Modify system settings", "시스템 설정 변경",
+        "Install unknown apps", "출처를 알 수 없는 앱 설치", "Notification access", "알림 접근 허용",
+        "Do Not Disturb access", "방해 금지 권한", "Picture-in-picture", "사진 속 사진", "화면 속 화면",
+        "Unrestricted data", "제한 없는 데이터 사용", "Optimize battery usage", "배터리 사용량 최적화",
+        "Premium text message services", "프리미엄 문자 메시지 서비스",
+        "特殊应用权限", "特殊访问权限", "显示在其他应用的上层", "闹钟和提醒",
+    )
+    private val SPECIAL_ACCESS_CONTROLS = setOf(
+        "Allow display over other apps", "Permit drawing over other apps",
+        "Allow setting alarms and reminders", "Allow alarms and reminders", "Allow usage access",
+        "Allow modifying system settings", "Allow access to manage all files", "Allow from this source",
+        "다른 앱 위에 표시 허용", "알람 및 리마인더 허용", "사용정보 접근 허용", "사용 정보 접근 허용",
+        "시스템 설정 변경 허용", "모든 파일에 대한 접근 허용", "이 출처 허용",
+    )
+    private val ON_LABELS = setOf("On", "In use", "사용 중", "사용중", "켜짐", "已开启")
+    private val OFF_ACTIONS = setOf("Off", "Turn off", "Stop", "Disable", "사용 안 함", "사용 안함", "끄기", "중지", "关闭")
+
+    fun isPageTitle(node: ScreenNode): Boolean = node.inToolbar ||
+        node.viewId?.substringAfter(":id/") in PAGE_TITLE_IDS
+
+    /** The original single-app rules below remain separate from new protection. */
+    fun isGuardedScreen(
+        windowPackage: String,
+        windowClass: String?,
+        nodes: List<ScreenNode>,
+        ownLabel: String,
+        ownPackage: String,
+        ownServiceLabel: String,
+        localizedSpecialAccessTitles: Set<String> = emptySet(),
+    ): Boolean {
+        if (isAboutOwnApp(windowPackage, windowClass, nodes, ownLabel, ownPackage)) return true
+        if (windowPackage != SETTINGS_PACKAGE) return false
+        // A distinctive activity/fragment name is useful even before its text
+        // loads. Generic host activities are deliberately absent from the set.
+        val screen = windowClass?.substringAfterLast('.')?.substringAfterLast('$')
+            ?.lowercase()?.removeSuffix("activity")
+        if (screen in SPECIAL_ACCESS_SCREENS) return true
+        val titles = nodes.filter(::isPageTitle)
+        val specialTitles = specialAccessTitles + localizedSpecialAccessTitles
+        if (titles.any { title ->
+                specialTitles.any { sameText(title.text.orEmpty(), it) }
+            }) return true
+
+        val singleAppHeader = nodes.any { it.viewId?.endsWith(":id/entity_header_title") == true }
+        val toggle = nodes.any { it.checkable || it.viewId?.substringAfter(":id/") in TOGGLE_IDS }
+        if (singleAppHeader && toggle && nodes.any { node ->
+                SPECIAL_ACCESS_CONTROLS.any { sameText(node.text.orEmpty(), it) }
+            }) return true
+
+        // Fallback if a very fast tap opens the disable confirmation first.
+        // A dialog title, positive action and the full service identity are
+        // required; a service row in an accessibility list is still insufficient.
+        val serviceDialog = nodes.any { it.viewId?.endsWith(":id/alertTitle") == true } &&
+            nodes.any { it.viewId?.endsWith(":id/button1") == true } &&
+            nodes.any { mentions(it.text, ownServiceLabel,
+                "$ownPackage/$ownPackage.OpenLockGuardAccessibilityService") }
+        if (serviceDialog) return true
+
+        // A service name in the installed-services list is insufficient. Require
+        // a single-service toolbar plus controls, or a specific detail class.
+        val namesOurService = nodes.any { sameText(it.text.orEmpty(), ownServiceLabel) }
+        if (!namesOurService) return false
+        if (screen in ACCESSIBILITY_DETAILS) return true
+        if (titles.none { sameText(it.text.orEmpty(), ownServiceLabel) }) return false
+        val hasOnState = nodes.any { node -> ON_LABELS.any { sameText(node.text.orEmpty(), it) } }
+        val hasOffButton = nodes.any { node ->
+            (node.clickable || node.className?.endsWith("Button") == true) &&
+                OFF_ACTIONS.any { sameText(node.text.orEmpty(), it) }
+        }
+        return toggle || (hasOnState && hasOffButton)
+    }
 
     /** Packages whose windows can host a screen that removes OpenLock. */
     fun isCandidatePackage(pkg: String): Boolean =

@@ -16,12 +16,13 @@ class UninstallGuardMatchingTest {
     private val pkg = "dev.abdullah.openlock"
 
     private fun about(windowPkg: String, cls: String?, vararg nodes: Pair<String?, String?>) =
-        UninstallGuard.isAboutOwnApp(
+        UninstallGuard.isGuardedScreen(
             windowPackage = windowPkg,
             windowClass = cls,
             nodes = nodes.map { ScreenNode(it.first, it.second) },
             ownLabel = label,
             ownPackage = pkg,
+            ownServiceLabel = "OpenLock uninstall guard",
         )
 
     private val settings = UninstallGuard.SETTINGS_PACKAGE

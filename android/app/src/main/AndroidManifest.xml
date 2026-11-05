@@ -95,8 +95,8 @@
 
         <!-- Uninstall-guard accessibility service (optional). Lets the guard
              read which app a Settings / package-installer screen is about, so
-             it locks only OpenLock's own App info, uninstall, and device-admin
-             screens. User grants it under Settings → Accessibility. -->
+             it locks OpenLock's own removal / accessibility-service screens
+             and Special app access screens. The user grants it in Accessibility. -->
         <service
             android:name=".OpenLockGuardAccessibilityService"
             android:exported="false"

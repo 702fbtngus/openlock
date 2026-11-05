@@ -43,6 +43,9 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Opt-in OEM screen diagnostics, also available in preview release APKs.
+        buildConfigField("boolean", "GUARD_DIAGNOSTICS",
+            (providers.gradleProperty("guardDiagnostics").orNull == "true").toString())
     }
 
     signingConfigs {

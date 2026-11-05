@@ -3,8 +3,10 @@
 /// content description.
 typedef ScreenNode = ({String? viewId, String? text});
 
-/// Pure decision for the uninstall-protection screen guard, mirrored exactly by
-/// the Kotlin `UninstallGuard`. Decides whether the active window is an OS
+/// Reference for the original single-app uninstall-protection rules in Kotlin
+/// `UninstallGuard.isAboutOwnApp`. Native enforcement additionally protects
+/// accessibility-service details and Special access via `isGuardedScreen`.
+/// Decides whether the active window is an OS
 /// screen *about OpenLock itself* that could remove it: its App info page (and
 /// sub-pages), its uninstall confirmation, or the device-admin deactivation
 /// screen naming it.
