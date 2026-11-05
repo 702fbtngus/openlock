@@ -127,6 +127,7 @@ final class FakeEnforcementBridge implements IEnforcementBridge {
   bool serviceRunning = false;
   bool deviceAdminActive = false;
   bool deviceAdminRequested = false;
+  bool appInfoRequested = false;
   bool deviceAdminDeactivated = false;
 
   @override
@@ -151,10 +152,14 @@ final class FakeEnforcementBridge implements IEnforcementBridge {
   }
 
   @override
-  Future<PermissionStates> getPermissionStates() async => permissions;
+  Future<PermissionStates> getPermissionStates() async =>
+      permissions.copyWith(deviceAdmin: deviceAdminActive);
 
   @override
   Future<void> requestUsageAccess() async {}
+
+  @override
+  Future<void> requestAppInfo() async => appInfoRequested = true;
 
   @override
   Future<void> requestOverlayPermission() async {}

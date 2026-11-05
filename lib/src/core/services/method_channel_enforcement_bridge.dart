@@ -60,12 +60,18 @@ final class MethodChannelEnforcementBridge implements IEnforcementBridge {
       screenGuardAccess: raw['screenGuardAccess'] == true,
       batteryExempt: raw['batteryExempt'] == true,
       serviceRunning: raw['serviceRunning'] == true,
+      deviceAdmin: raw['deviceAdmin'] == true,
+      restrictedSettingsAllowed: raw['restrictedSettingsAllowed'] as bool?,
     );
   }
 
   @override
   Future<void> requestUsageAccess() =>
       _channel.invokeMethod<void>('requestUsageAccess');
+
+  @override
+  Future<void> requestAppInfo() =>
+      _channel.invokeMethod<void>('requestAppInfo');
 
   @override
   Future<void> setGuardDiagnosticsEnabled({required bool enabled}) =>

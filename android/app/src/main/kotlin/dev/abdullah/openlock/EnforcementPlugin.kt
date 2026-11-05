@@ -112,6 +112,15 @@ class EnforcementPlugin(private val activity: Activity) :
                 launch(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                 result.success(null)
             }
+            "requestAppInfo" -> {
+                launch(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:${activity.packageName}"),
+                    ),
+                )
+                result.success(null)
+            }
             "requestOverlayPermission" -> {
                 launch(
                     Intent(
@@ -287,6 +296,10 @@ class EnforcementPlugin(private val activity: Activity) :
         "screenGuardAccess" to hasScreenGuardAccess(),
         "batteryExempt" to isBatteryExempt(),
         "serviceRunning" to OpenLockMonitorService.isRunning,
+        "deviceAdmin" to isDeviceAdminActive(),
+        // Android 13 introduced restricted settings. On newer Android versions,
+        // its status is not available through a public API for ordinary apps.
+        "restrictedSettingsAllowed" to if (Build.VERSION.SDK_INT < 33) true else null,
     )
 
     /** Whether OpenLock holds notification-listener access (required to hide

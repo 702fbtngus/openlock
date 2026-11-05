@@ -1,10 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:openlock/src/core/di.dart';
 import 'package:openlock/src/core/interfaces/enforcement_bridge.dart';
+import 'package:openlock/src/features/enforcement/providers/config_providers.dart';
+import 'package:openlock/src/features/settings/providers/settings_providers.dart';
 
 /// Live snapshot of the special-access permissions the monitor service needs.
 /// Refreshed whenever the user returns from a system settings screen.
 final class PermissionsController extends AsyncNotifier<PermissionStates> {
+  bool _awaitingDeviceAdmin = false;
+
   @override
   Future<PermissionStates> build() =>
       ref.watch(enforcementBridgeProvider).getPermissionStates();
@@ -12,13 +16,31 @@ final class PermissionsController extends AsyncNotifier<PermissionStates> {
   Future<void> refresh() async {
     state = const AsyncLoading<PermissionStates>().copyWithPrevious(state);
     state = await AsyncValue.guard(
-      () => ref.read(enforcementBridgeProvider).getPermissionStates(),
+      () async {
+        if (_awaitingDeviceAdmin) {
+          await ref.read(configControllerProvider.future);
+          await ref
+              .read(preventUninstallControllerProvider.notifier)
+              .refresh();
+          _awaitingDeviceAdmin = false;
+        }
+        return _bridge.getPermissionStates();
+      },
     );
   }
 
   IEnforcementBridge get _bridge => ref.read(enforcementBridgeProvider);
 
   Future<void> requestUsageAccess() => _bridge.requestUsageAccess();
+  Future<void> requestAppInfo() => _bridge.requestAppInfo();
+
+  Future<void> requestDeviceAdmin() async {
+    await ref.read(configControllerProvider.future);
+    // Use the same enable/config-sync flow as the Settings screen. Resume
+    // refresh confirms activation or restores the flag after cancellation.
+    _awaitingDeviceAdmin = true;
+    await ref.read(preventUninstallControllerProvider.notifier).requestEnable();
+  }
   Future<void> requestOverlay() => _bridge.requestOverlayPermission();
   Future<void> requestBattery() => _bridge.requestBatteryExemption();
   Future<void> requestNotifications() =>

@@ -31,6 +31,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # PR builds never receive the persistent signing identity.
+      # A trusted preview must fail if secrets are missing, rather than silently
+      # generating a different debug certificate and breaking update installs.
+      - name: Restore fixed signing key
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          python3 scripts/restore_signing_key.py
+          keytool -exportcert -keystore android/app/release.keystore \
+            -storetype PKCS12 -alias "$KEY_ALIAS" -storepass:env KEYSTORE_PASSWORD \
+            -file "$RUNNER_TEMP/openlock-signing-cert.der"
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -45,16 +61,59 @@ jobs:
         run: flutter test
 
       - name: Build APK
+        if: github.event_name != 'pull_request'
         run: flutter build apk --release
+
+      - name: Build PR test APK
+        if: github.event_name == 'pull_request'
+        run: flutter build apk --debug
 
       - name: Kotlin guard regression tests
         working-directory: android
         run: ./gradlew :app:testDebugUnitTest
 
+      - name: Verify fixed APK signature
+        if: github.event_name != 'pull_request'
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner was not found."
+            exit 1
+          fi
+          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk > "$RUNNER_TEMP/openlock-apk-cert.txt"
+          python3 - <<'PY'
+          import hashlib, os, pathlib, re
+          directory = pathlib.Path(os.environ['RUNNER_TEMP'])
+          expected = hashlib.sha256((directory / 'openlock-signing-cert.der').read_bytes()).hexdigest()
+          report = (directory / 'openlock-apk-cert.txt').read_text()
+          actual = re.findall(r'Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)', report)
+          if [value.lower() for value in actual] != [expected]:
+              raise SystemExit('APK certificate does not match the fixed signing key.')
+          print('Fixed APK certificate verified. SHA-256:', expected)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write(f'Fixed APK signing certificate SHA-256: `{expected}`\n')
+          PY
+
       - name: Upload APK
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: openlock-preview-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload PR test APK
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openlock-pr-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove signing material
+        if: always() && github.event_name != 'pull_request'
+        run: |
+          rm -f android/key.properties android/app/release.keystore \
+            "$RUNNER_TEMP/openlock-signing-cert.der" "$RUNNER_TEMP/openlock-apk-cert.txt"

@@ -31,6 +31,8 @@ final class PermissionStates {
     required this.screenGuardAccess,
     required this.batteryExempt,
     required this.serviceRunning,
+    this.deviceAdmin = false,
+    this.restrictedSettingsAllowed,
   });
 
   const PermissionStates.unknown()
@@ -40,7 +42,9 @@ final class PermissionStates {
         notificationAccess = false,
         screenGuardAccess = false,
         batteryExempt = false,
-        serviceRunning = false;
+        serviceRunning = false,
+        deviceAdmin = false,
+        restrictedSettingsAllowed = null;
 
   final bool usageAccess;
   final bool overlay;
@@ -57,6 +61,11 @@ final class PermissionStates {
   final bool screenGuardAccess;
   final bool batteryExempt;
   final bool serviceRunning;
+  final bool deviceAdmin;
+
+  /// Null when Android cannot report this status to an ordinary app. Opening
+  /// App info alone must never be treated as granting restricted settings.
+  final bool? restrictedSettingsAllowed;
 
   /// The two permissions without which cross-app locking cannot work at all.
   bool get canEnforce => usageAccess && overlay;
@@ -72,6 +81,7 @@ final class PermissionStates {
     bool? screenGuardAccess,
     bool? batteryExempt,
     bool? serviceRunning,
+    bool? deviceAdmin,
   }) =>
       PermissionStates(
         usageAccess: usageAccess ?? this.usageAccess,
@@ -81,6 +91,8 @@ final class PermissionStates {
         screenGuardAccess: screenGuardAccess ?? this.screenGuardAccess,
         batteryExempt: batteryExempt ?? this.batteryExempt,
         serviceRunning: serviceRunning ?? this.serviceRunning,
+        deviceAdmin: deviceAdmin ?? this.deviceAdmin,
+        restrictedSettingsAllowed: restrictedSettingsAllowed,
       );
 }
 
@@ -134,6 +146,7 @@ abstract interface class IEnforcementBridge {
   Future<String> getGuardDiagnostics();
 
   Future<void> requestUsageAccess();
+  Future<void> requestAppInfo();
   Future<void> requestOverlayPermission();
   Future<void> requestBatteryExemption();
   Future<void> requestNotificationPermission();

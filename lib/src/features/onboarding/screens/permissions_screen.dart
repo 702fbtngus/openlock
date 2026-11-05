@@ -40,6 +40,39 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
     }
   }
 
+  Future<void> _explainRestrictedSettings() async {
+    final openAppInfo = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Allow restricted settings'),
+        content: const Text(
+          'Android may restrict sensitive permissions for apps installed from '
+          'an APK. Allow restricted settings before activating device '
+          'administrator access if Android asks you to.\n\n'
+          '1. On the App info screen, tap the three-dot menu in the top right.\n'
+          '2. Tap "Allow restricted settings" and confirm with your device '
+          'PIN or fingerprint.\n'
+          '3. Return to OpenLock and grant Device administrator.\n\n'
+          'If this option is missing or already allowed, continue with Device '
+          'administrator. The menu varies by device. Android does not let '
+          'OpenLock verify this step automatically.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || openAppInfo != true) return;
+    await ref.read(permissionsControllerProvider.notifier).requestAppInfo();
+  }
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(permissionsControllerProvider);
@@ -63,6 +96,26 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
             const SizedBox(height: AppSpacing.md),
             RowGroup(
               children: [
+                _PermissionTile(
+                  icon: Icons.app_settings_alt_rounded,
+                  title: 'Allow restricted settings',
+                  subtitle: states.restrictedSettingsAllowed == true
+                      ? 'This Android version does not require this step.'
+                      : 'If required, allow this in App info before granting '
+                          'Device administrator. Check manually in Settings.',
+                  granted: states.restrictedSettingsAllowed == true,
+                  required: false,
+                  onFix: _explainRestrictedSettings,
+                ),
+                _PermissionTile(
+                  icon: Icons.admin_panel_settings_rounded,
+                  title: 'Device administrator',
+                  subtitle:
+                      'Protects OpenLock from being uninstalled while active.',
+                  granted: states.deviceAdmin,
+                  required: false,
+                  onFix: controller.requestDeviceAdmin,
+                ),
                 _PermissionTile(
                   icon: Icons.query_stats_rounded,
                   title: 'Usage access',

@@ -9,6 +9,8 @@ build/
 pubspec_overrides.yaml
 
 # Local signing secrets — never commit
+/.signing/
+/.signing-new-*/
 android/key.properties
 **/*.jks
 **/*.keystore

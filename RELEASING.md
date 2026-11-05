@@ -23,7 +23,11 @@ optional version label).
 
 ## Signing
 
-Release builds are signed with the shared Secure Suite keystore, stored as
+For updateable preview APKs, follow [the one-time signing setup](docs/PREVIEW_SIGNING_SETUP.md).
+Trusted preview builds and Release builds use the same four repository secrets;
+PR test APKs are separately debug-signed and do not use that key.
+
+Release builds are signed with this repository's configured keystore, stored as
 **encrypted repository secrets** (never in the repo, never printed in logs):
 
 | Secret | Purpose |
