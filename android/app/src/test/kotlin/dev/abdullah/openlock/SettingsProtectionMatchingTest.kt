@@ -11,7 +11,8 @@ class SettingsProtectionMatchingTest {
     private val subSettings = "com.android.settings.SubSettings"
 
     private fun title(text: String) = ScreenNode(null, text, inToolbar = true)
-    private fun row(text: String) = ScreenNode("android:id/title", text)
+    private fun row(text: String) = ScreenNode("android:id/title", text,
+        className = "android.widget.TextView", clickable = true, inList = true)
     private fun toggle() = ScreenNode("android:id/switch_widget", null, checkable = true)
 
     private fun guarded(
@@ -30,6 +31,34 @@ class SettingsProtectionMatchingTest {
         assertTrue(guarded(title(service), toggle()))
         assertTrue(guarded(title("서비스 이름"), toggle(), serviceLabel = "서비스 이름"))
         assertTrue(guarded(ScreenNode("android:id/action_bar_title", service), toggle()))
+    }
+
+    @Test fun acceptsPaneTitlesWithoutToolbarIds() {
+        assertTrue(guarded(ScreenNode(null, null, paneTitle = "특별한 접근")))
+        assertTrue(guarded(ScreenNode(null, null, paneTitle = service), toggle()))
+        assertFalse(guarded(ScreenNode(null, null, paneTitle = "설치된 앱"), row(service), toggle()))
+        assertFalse(guarded(ScreenNode(null, null, paneTitle = "앱"), row("특별한 접근")))
+    }
+
+    @Test fun acceptsStandaloneOemTextHeadersAndSemanticHeadings() {
+        assertTrue(guarded(ScreenNode(null, "특별한 접근", className = "android.widget.TextView")))
+        assertTrue(guarded(ScreenNode(null, service, className = "android.widget.TextView"), toggle()))
+        assertTrue(guarded(ScreenNode(null, "Special access", className = "android.view.View", heading = true)))
+    }
+
+    @Test fun plainTextHeaderFallbackExcludesCollectionsAndClickableRows() {
+        assertFalse(guarded(ScreenNode(null, "Special access", className = "android.widget.TextView", inList = true)))
+        assertFalse(guarded(ScreenNode(null, "Special access", className = "android.widget.TextView", clickable = true)))
+        assertFalse(guarded(ScreenNode(null, "Special access", heading = true, inList = true)))
+        assertFalse(guarded(ScreenNode(null, service, className = "android.widget.TextView", inList = true), toggle()))
+        assertFalse(guarded(ScreenNode(null, service, className = "android.widget.TextView", clickable = true), toggle()))
+    }
+
+    @Test fun normalizesWrappedAndBidirectionalTitles() {
+        assertTrue(guarded(title("\u200eOpenLock\nuninstall\u00a0guard\u200f"), toggle()))
+        assertTrue(guarded(title("Alarms\u00a0 &\nreminders")))
+        assertTrue(guarded(title(service), row("사용\n중"),
+            ScreenNode(null, "사용\u00a0안 함", clickable = true)))
     }
 
     @Test fun guardsSamsungStyleStatusAndDisableButtonBeforeConfirmation() {

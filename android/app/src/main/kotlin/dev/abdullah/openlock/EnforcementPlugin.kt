@@ -96,6 +96,18 @@ class EnforcementPlugin(private val activity: Activity) :
                 replyFrom(appsExecutor, result) { appIcons(apps) }
             }
             "getPermissionStates" -> result.success(permissionStates())
+            "setGuardDiagnosticsEnabled" -> {
+                if (call.argument<Boolean>("enabled") == true) GuardDiagnostics.start() else GuardDiagnostics.stop()
+                result.success(null)
+            }
+            "getGuardDiagnostics" -> result.success(buildString {
+                appendLine("${GuardDiagnostics.REVISION} commit=${BuildConfig.BUILD_REVISION}")
+                appendLine("App ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                appendLine("Device ${Build.MANUFACTURER} ${Build.MODEL} Android ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}")
+                appendLine("Permissions: ${permissionStates()}")
+                appendLine("PIN configured=${store.pinHash() != null} preventUninstall=${store.preventUninstall()}")
+                append(GuardDiagnostics.report())
+            })
             "requestUsageAccess" -> {
                 launch(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                 result.success(null)

@@ -11,6 +11,9 @@ data class ScreenNode(
     val clickable: Boolean = false,
     // Set only for toolbar descendants, never preference-row titles/headings.
     val inToolbar: Boolean = false,
+    val paneTitle: String? = null,
+    val heading: Boolean = false,
+    val inList: Boolean = false,
 )
 
 /**
@@ -40,6 +43,8 @@ object UninstallGuard {
 
     private val PAGE_TITLE_IDS = setOf("action_bar_title", "toolbar_title", "collapsing_toolbar_title")
     private val TOGGLE_IDS = setOf("switch_widget", "switch_bar", "switchbar", "switch_text", "main_switch_bar")
+    private val DIRECTION_MARKS = Regex("[\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]")
+    private val TITLE_WHITESPACE = Regex("[\\s\\u00a0\\u202f]+")
 
     // Exact screen names, not "accessibility"/"specialaccess" substrings:
     // DeviceAdminSettings and generic ManageApplications must stay unguarded.
@@ -92,7 +97,11 @@ object UninstallGuard {
     private val OFF_ACTIONS = setOf("Off", "Turn off", "Stop", "Disable", "사용 안 함", "사용 안함", "끄기", "중지", "关闭")
 
     fun isPageTitle(node: ScreenNode): Boolean = node.inToolbar ||
-        node.viewId?.substringAfter(":id/") in PAGE_TITLE_IDS
+        node.viewId?.substringAfter(":id/") in PAGE_TITLE_IDS ||
+        // OEM/Compose headers may expose no toolbar ID. Exclude collection
+        // children and clickable preference rows before accepting plain labels.
+        (!node.inList && !node.clickable && (node.heading ||
+            node.className?.endsWith("TextView") == true))
 
     /** The original single-app rules below remain separate from new protection. */
     fun isGuardedScreen(
@@ -111,10 +120,10 @@ object UninstallGuard {
         val screen = windowClass?.substringAfterLast('.')?.substringAfterLast('$')
             ?.lowercase()?.removeSuffix("activity")
         if (screen in SPECIAL_ACCESS_SCREENS) return true
-        val titles = nodes.filter(::isPageTitle)
+        val titles = nodes.filter(::isPageTitle).mapNotNull { it.text } + nodes.mapNotNull { it.paneTitle }
         val specialTitles = specialAccessTitles + localizedSpecialAccessTitles
         if (titles.any { title ->
-                specialTitles.any { sameText(title.text.orEmpty(), it) }
+                specialTitles.any { sameText(title, it) }
             }) return true
 
         val singleAppHeader = nodes.any { it.viewId?.endsWith(":id/entity_header_title") == true }
@@ -134,10 +143,11 @@ object UninstallGuard {
 
         // A service name in the installed-services list is insufficient. Require
         // a single-service toolbar plus controls, or a specific detail class.
-        val namesOurService = nodes.any { sameText(it.text.orEmpty(), ownServiceLabel) }
+        val namesOurService = nodes.any { sameText(it.text.orEmpty(), ownServiceLabel) ||
+            sameText(it.paneTitle.orEmpty(), ownServiceLabel) }
         if (!namesOurService) return false
         if (screen in ACCESSIBILITY_DETAILS) return true
-        if (titles.none { sameText(it.text.orEmpty(), ownServiceLabel) }) return false
+        if (titles.none { sameText(it, ownServiceLabel) }) return false
         val hasOnState = nodes.any { node -> ON_LABELS.any { sameText(node.text.orEmpty(), it) } }
         val hasOffButton = nodes.any { node ->
             (node.clickable || node.className?.endsWith("Button") == true) &&
@@ -191,7 +201,13 @@ object UninstallGuard {
     }
 
     private fun sameText(text: String, label: String): Boolean =
-        text.trim().equals(label.trim(), ignoreCase = true)
+        normalizeText(text).equals(normalizeText(label), ignoreCase = true)
+
+    // Samsung can insert line breaks, non-breaking spaces or bidi marks in a
+    // rendered title. These formatting differences do not change its identity.
+    private fun normalizeText(text: String): String = text
+        .replace(DIRECTION_MARKS, "")
+        .replace(TITLE_WHITESPACE, " ").trim()
 
     /** [text] names the app: its package name, or its label as a whole word
      *  ("OpenLock" in "Uninstall OpenLock?" but not in "OpenLockPro"). */

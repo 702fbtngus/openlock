@@ -129,6 +129,10 @@ abstract interface class IEnforcementBridge {
 
   Future<PermissionStates> getPermissionStates();
 
+  /// Explicit, temporary, local-only capture for diagnosing Settings guards.
+  Future<void> setGuardDiagnosticsEnabled({required bool enabled});
+  Future<String> getGuardDiagnostics();
+
   Future<void> requestUsageAccess();
   Future<void> requestOverlayPermission();
   Future<void> requestBatteryExemption();

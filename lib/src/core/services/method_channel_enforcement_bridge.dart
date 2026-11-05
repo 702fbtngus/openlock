@@ -68,6 +68,17 @@ final class MethodChannelEnforcementBridge implements IEnforcementBridge {
       _channel.invokeMethod<void>('requestUsageAccess');
 
   @override
+  Future<void> setGuardDiagnosticsEnabled({required bool enabled}) =>
+      _channel.invokeMethod<void>(
+        'setGuardDiagnosticsEnabled',
+        {'enabled': enabled},
+      );
+
+  @override
+  Future<String> getGuardDiagnostics() async =>
+      await _channel.invokeMethod<String>('getGuardDiagnostics') ?? '';
+
+  @override
   Future<void> requestOverlayPermission() =>
       _channel.invokeMethod<void>('requestOverlayPermission');
 

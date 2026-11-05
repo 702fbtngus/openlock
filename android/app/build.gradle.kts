@@ -10,6 +10,8 @@ plugins {
 
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
+val buildRevision = providers.environmentVariable("GITHUB_SHA").orNull
+    ?.takeIf { it.matches(Regex("[0-9a-fA-F]{40,64}")) }?.take(12) ?: "local"
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
@@ -43,6 +45,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        buildConfigField("String", "BUILD_REVISION", "\"$buildRevision\"")
         // Opt-in OEM screen diagnostics, also available in preview release APKs.
         buildConfigField("boolean", "GUARD_DIAGNOSTICS",
             (providers.gradleProperty("guardDiagnostics").orNull == "true").toString())

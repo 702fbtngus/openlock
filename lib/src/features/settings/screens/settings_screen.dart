@@ -13,6 +13,7 @@ import 'package:openlock/src/features/enforcement/models/relock_policy.dart';
 import 'package:openlock/src/features/enforcement/providers/config_providers.dart';
 import 'package:openlock/src/features/onboarding/providers/permissions_providers.dart';
 import 'package:openlock/src/features/settings/providers/settings_providers.dart';
+import 'package:openlock/src/features/settings/screens/guard_diagnostics_dialog.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -413,6 +414,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   icon: Icons.backup_outlined,
                   title: 'Backup & restore',
                   onTap: () => context.push(AppRoutes.backup),
+                ),
+                SettingsTile(
+                  icon: Icons.bug_report_outlined,
+                  title: '설정 보호 진단',
+                  subtitle: '문제 화면을 재현하고 진단 보고서 복사',
+                  onTap: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => const GuardDiagnosticsDialog(),
+                  ),
                 ),
               ],
             ),

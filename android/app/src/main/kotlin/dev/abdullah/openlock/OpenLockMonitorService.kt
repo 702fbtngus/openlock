@@ -132,16 +132,21 @@ class OpenLockMonitorService : Service() {
 
     /** Shared by event-driven detection and the polling fallback. */
     private fun enforceGuardedScreen(current: String, now: Long): Boolean {
-        if (store.pinHash() == null || !store.preventUninstall() ||
-            !GuardedScreen.isShowing(current)
-        ) return false
+        if (!GuardedScreen.isShowing(current)) return false
+        if (store.pinHash() == null || !store.preventUninstall()) {
+            GuardDiagnostics.enforcement("$current matched; protection inactive " +
+                "(PIN configured=${store.pinHash() != null}, preventUninstall=${store.preventUninstall()})")
+            return false
+        }
         // Preserve the original per-package session: authentication permits
         // changing settings, including disabling the service, until screen-off.
         val unlockedAt = LockSession.unlockedAt(current)
         val stillUnlocked = unlockedAt != 0L && screenOffAt <= unlockedAt
-        if (!stillUnlocked &&
-            !(current == lastLaunchedPkg && now - lastLaunchAt < RELAUNCH_GUARD_MS)
-        ) {
+        val debounced = current == lastLaunchedPkg && now - lastLaunchAt < RELAUNCH_GUARD_MS
+        GuardDiagnostics.enforcement("$current matched; sessionUnlocked=$stillUnlocked " +
+            "debounced=$debounced unlockedAt=$unlockedAt screenOffAt=$screenOffAt " +
+            "launchRequested=${!stillUnlocked && !debounced}")
+        if (!stillUnlocked && !debounced) {
             lastLaunchedPkg = current
             lastLaunchAt = now
             launchLock(current)
@@ -155,7 +160,10 @@ class OpenLockMonitorService : Service() {
             addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
             putExtra(LockActivity.EXTRA_PACKAGE, packageName)
         }
-        runCatching { startActivity(intent) }
+        GuardDiagnostics.launch("LockActivity launch requested for $packageName")
+        runCatching { startActivity(intent) }.onFailure {
+            GuardDiagnostics.launch("LockActivity launch failed: ${it.javaClass.simpleName}: ${it.message}")
+        }
     }
 
     /** The latest foreground package. */

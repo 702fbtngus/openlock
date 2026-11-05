@@ -112,6 +112,16 @@ final class FakeEnforcementBridge implements IEnforcementBridge {
   /// The packages of each [getAppIcons] call, in order.
   final List<List<String>> iconRequests = [];
   PermissionStates permissions;
+  bool guardDiagnosticsEnabled = false;
+  String guardDiagnosticsReport = 'Test guard diagnostic report';
+
+  @override
+  Future<void> setGuardDiagnosticsEnabled({required bool enabled}) async {
+    guardDiagnosticsEnabled = enabled;
+  }
+
+  @override
+  Future<String> getGuardDiagnostics() async => guardDiagnosticsReport;
   Map<String, dynamic>? lastPushedConfig;
   final List<IntruderRecord> records = [];
   bool serviceRunning = false;

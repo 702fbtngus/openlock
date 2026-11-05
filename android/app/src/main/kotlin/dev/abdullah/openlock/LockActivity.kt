@@ -105,6 +105,7 @@ class LockActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        GuardDiagnostics.launch("LockActivity resumed for $lockedPackage")
         // Auto-trigger the biometric prompt once every time the real lock
         // screen appears (deterministic; the in-flight guard prevents the
         // onCreate + onResume pair from stacking two prompts).
