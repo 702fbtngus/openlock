@@ -33,6 +33,13 @@ jobs:
         run: flutter test --dart-define=OFFLYNE_STORE=fdroid test/store_build_test.dart
       - name: Build debug APK
         run: flutter build apk --debug
+      - name: Upload preview APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: openlock-preview-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
       - name: Kotlin unit tests
         working-directory: android
         # Runs after the APK build so local.properties (flutter.sdk) exists.
