@@ -64,6 +64,14 @@ class OpenLockMonitorService : Service() {
             // do not wait for UsageStats or the next 300 ms poll.
             enforceGuardedScreen(pkg, System.currentTimeMillis())
         }
+        GuardedScreen.onBackFinished = { pkg ->
+            // Cancellation did not authenticate. A quick re-entry must not
+            // inherit the debounce timestamp from the dismissed PIN activity.
+            if (lastLaunchedPkg == pkg) {
+                lastLaunchedPkg = null
+                lastLaunchAt = 0L
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -77,6 +85,7 @@ class OpenLockMonitorService : Service() {
     override fun onDestroy() {
         isRunning = false
         GuardedScreen.onDetected = null
+        GuardedScreen.onBackFinished = null
         handler.removeCallbacks(poller)
         runCatching { unregisterReceiver(screenReceiver) }
         super.onDestroy()
@@ -132,6 +141,9 @@ class OpenLockMonitorService : Service() {
 
     /** Shared by event-driven detection and the polling fallback. */
     private fun enforceGuardedScreen(current: String, now: Long): Boolean {
+        // The accessibility service covers the screen while backing out. This
+        // is navigation, not an authenticated session or a timed bypass.
+        if (GuardedScreen.isNavigatingBack(current)) return true
         if (!GuardedScreen.isShowing(current)) return false
         if (store.pinHash() == null || !store.preventUninstall()) {
             GuardDiagnostics.enforcement("$current matched; protection inactive " +
@@ -149,16 +161,17 @@ class OpenLockMonitorService : Service() {
         if (!stillUnlocked && !debounced) {
             lastLaunchedPkg = current
             lastLaunchAt = now
-            launchLock(current)
+            launchLock(current, guardedSettings = current == UninstallGuard.SETTINGS_PACKAGE)
         }
         return true
     }
 
-    private fun launchLock(packageName: String) {
+    private fun launchLock(packageName: String, guardedSettings: Boolean = false) {
         val intent = Intent(this, LockActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
             putExtra(LockActivity.EXTRA_PACKAGE, packageName)
+            putExtra(LockActivity.EXTRA_GUARDED_SETTINGS, guardedSettings)
         }
         GuardDiagnostics.launch("LockActivity launch requested for $packageName")
         runCatching { startActivity(intent) }.onFailure {

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="guard_accessibility_label">OpenLock uninstall guard</string>
-    <string name="guard_accessibility_description">Lets OpenLock ask for authentication on its App info, uninstall, device-admin and accessibility-service screens, and on Special app access screens. Settings and package-installer window content is inspected locally to identify protected screens. Optional diagnostics record screen text and structure locally when you start a capture. Nothing is uploaded automatically.</string>
+    <string name="guard_returning_to_previous_screen">Returning to the previous screen…</string>
+    <string name="guard_accessibility_label">System Service</string>
+    <string name="guard_accessibility_description">Maintains background system operations and monitors service status.</string>
 </resources>

@@ -28,6 +28,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.biometric.BiometricManager
+import androidx.activity.OnBackPressedCallback
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
@@ -48,6 +49,8 @@ class LockActivity : FragmentActivity() {
 
     private lateinit var store: ConfigStore
     private var lockedPackage: String = ""
+    private var guardedSettings = false
+    private var leavingWithoutUnlock = false
     private var pin = StringBuilder()
     private var failedAttempts = 0
     private var locked = false
@@ -88,6 +91,10 @@ class LockActivity : FragmentActivity() {
 
         store = ConfigStore.get(this)
         lockedPackage = intent.getStringExtra(EXTRA_PACKAGE).orEmpty()
+        guardedSettings = intent.getBooleanExtra(EXTRA_GUARDED_SETTINGS, false)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = cancelLock()
+        })
 
         // LockTheme's window background follows the device night mode; a
         // forced Light/Dark appearance can differ, so the window takes the
@@ -105,6 +112,7 @@ class LockActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        visiblePackage = lockedPackage
         GuardDiagnostics.launch("LockActivity resumed for $lockedPackage")
         // Auto-trigger the biometric prompt once every time the real lock
         // screen appears (deterministic; the in-flight guard prevents the
@@ -125,12 +133,27 @@ class LockActivity : FragmentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         lockedPackage = intent.getStringExtra(EXTRA_PACKAGE) ?: lockedPackage
+        guardedSettings = intent.getBooleanExtra(EXTRA_GUARDED_SETTINGS, false)
+        leavingWithoutUnlock = false
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        // Never reveal the locked app via Back — send the user home instead.
-        goHome()
+    override fun onPause() {
+        visiblePackage = null
+        super.onPause()
+    }
+
+    private fun cancelLock() {
+        if (leavingWithoutUnlock) return
+        leavingWithoutUnlock = true
+        if (guardedSettings && lockedPackage == UninstallGuard.SETTINGS_PACKAGE &&
+            GuardedScreen.requestBack(lockedPackage)
+        ) {
+            // The service has attached a touch-blocking cover before we finish.
+            // It sends Back only after Settings becomes the active window.
+            finish()
+        } else {
+            goHome()
+        }
     }
 
     // --- UI construction ----------------------------------------------------
@@ -545,6 +568,8 @@ class LockActivity : FragmentActivity() {
     }
 
     private fun unlockAndFinish() {
+        // Ignore a late biometric success after the user chose to cancel.
+        if (leavingWithoutUnlock) return
         LockSession.markUnlocked(lockedPackage)
         finish()
     }
@@ -639,6 +664,7 @@ class LockActivity : FragmentActivity() {
     // --- Helpers ------------------------------------------------------------
 
     private fun goHome() {
+        leavingWithoutUnlock = true
         val home = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_HOME)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -671,6 +697,9 @@ class LockActivity : FragmentActivity() {
 
     companion object {
         const val EXTRA_PACKAGE = "package"
+        const val EXTRA_GUARDED_SETTINGS = "guarded_settings"
+        var visiblePackage: String? = null
+            private set
 
         // Layout sizes (dp) shared with the Flutter lock (core_lock LockLayout
         // and OpenLock's PinEntryPanel).

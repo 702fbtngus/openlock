@@ -1,11 +1,18 @@
 package dev.abdullah.openlock
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
+import android.graphics.Color
+import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.Build
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.TextView
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -16,6 +23,16 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     private var windowId = -1
     private val handler = Handler(Looper.getMainLooper())
     private val recheck = Runnable { inspectWindow() }
+    private var backNavigation: GuardBackNavigation? = null
+    private var backTarget: String? = null
+    private var navigationCover: View? = null
+    private val navigationPoller = object : Runnable {
+        override fun run() {
+            if (backNavigation == null) return
+            inspectWindow()
+            if (backNavigation != null) handler.postDelayed(this, 75L)
+        }
+    }
     private var lastDiagnosticAt = -1_000L
     private var lastDiagnosticSignature: Int? = null
     private val ownLabel by lazy { applicationInfo.loadLabel(packageManager).toString() }
@@ -34,6 +51,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        GuardedScreen.onBackRequested = ::startBackNavigation
         inspectWindow()
         scheduleRechecks()
     }
@@ -76,6 +94,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow
         if (root == null) {
             GuardedScreen.clear()
+            advanceBackNavigation(null, false, false)
             GuardDiagnostics.snapshot("no-root", "Active window root is unavailable.")
             return
         }
@@ -83,6 +102,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
             val rootPkg = root.packageName?.toString()
             if (rootPkg == null || !UninstallGuard.isCandidatePackage(rootPkg)) {
                 GuardedScreen.clear()
+                advanceBackNavigation(rootPkg, false, true)
                 // Unknown OEM packages are identified without reading their text.
                 if (rootPkg != packageName) GuardDiagnostics.snapshot("other-package:$rootPkg",
                     "Ignored package=$rootPkg class=$windowClass (not a candidate)")
@@ -103,6 +123,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                 ownServiceLabel = serviceLabel,
                 localizedSpecialAccessTitles = localizedTitles,
             )
+            advanceBackNavigation(rootPkg, guarded, nodes.isNotEmpty())
             if (guarded) GuardedScreen.set(rootPkg) else GuardedScreen.clear()
             captureDiagnostics(rootPkg, cls, root.windowId, nodes, guarded)
             logDiagnostics(rootPkg, cls, nodes, guarded)
@@ -110,6 +131,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
             // A transitioning Settings tree can become invalid while walking it.
             // Keep the service alive and let the content event/rechecks retry.
             GuardedScreen.clear()
+            advanceBackNavigation(null, false, false)
             GuardDiagnostics.snapshot("read-error", "Window read failed: ${error.javaClass.simpleName}: ${error.message}")
         } finally {
             root.recycle()
@@ -117,14 +139,92 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
+        if (backNavigation != null) performGlobalAction(GLOBAL_ACTION_HOME)
+        finishBackNavigation()
         handler.removeCallbacks(recheck)
         GuardedScreen.clear()
     }
 
     override fun onDestroy() {
+        GuardedScreen.onBackRequested = null
+        if (backNavigation != null) performGlobalAction(GLOBAL_ACTION_HOME)
+        finishBackNavigation()
         handler.removeCallbacks(recheck)
         GuardedScreen.clear()
         super.onDestroy()
+    }
+
+    private fun startBackNavigation(pkg: String): Boolean {
+        if (pkg != UninstallGuard.SETTINGS_PACKAGE) return false
+        if (backNavigation != null) return backTarget == pkg
+        val cover = TextView(this).apply {
+            setBackgroundColor(Color.rgb(18, 20, 24))
+            setTextColor(Color.WHITE)
+            text = getString(R.string.guard_returning_to_previous_screen)
+            gravity = Gravity.CENTER
+            isClickable = true
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        }
+        // A non-focusable accessibility overlay blocks touches while keeping
+        // the underlying Settings window available for global Back/inspection.
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_SECURE,
+            PixelFormat.OPAQUE,
+        )
+        val manager = getSystemService(WINDOW_SERVICE) as WindowManager
+        if (runCatching { manager.addView(cover, params) }.isFailure) return false
+        navigationCover = cover
+        backTarget = pkg
+        backNavigation = GuardBackNavigation(pkg, packageName, SystemClock.elapsedRealtime())
+        GuardedScreen.backNavigationPackage = pkg
+        handler.post(navigationPoller)
+        return true
+    }
+
+    private fun advanceBackNavigation(pkg: String?, guarded: Boolean, contentReady: Boolean) {
+        val navigation = backNavigation ?: return
+        val action = navigation.next(pkg, guarded, contentReady,
+            LockActivity.visiblePackage == backTarget, SystemClock.elapsedRealtime())
+        when (action) {
+            GuardBackNavigation.Action.WAIT -> Unit
+            GuardBackNavigation.Action.BACK -> {
+                val accepted = performGlobalAction(GLOBAL_ACTION_BACK)
+                GuardDiagnostics.launch("Settings cancellation: Back accepted=$accepted")
+            }
+            GuardBackNavigation.Action.HOME -> {
+                val accepted = performGlobalAction(GLOBAL_ACTION_HOME)
+                GuardDiagnostics.launch("Settings cancellation fallback: Home accepted=$accepted")
+            }
+            GuardBackNavigation.Action.RESTORE_LOCK -> {
+                // Home did not leave Settings. Keep the cover until the lock
+                // actually resumes; never grant an unlock to break a loop.
+                val intent = Intent(this, LockActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                    putExtra(LockActivity.EXTRA_PACKAGE, backTarget)
+                    putExtra(LockActivity.EXTRA_GUARDED_SETTINGS, true)
+                }
+                runCatching { startActivity(intent) }.onFailure {
+                    GuardDiagnostics.launch("Settings cancellation: restore lock failed: ${it.javaClass.simpleName}")
+                }
+            }
+            GuardBackNavigation.Action.COMPLETE -> finishBackNavigation()
+        }
+    }
+
+    private fun finishBackNavigation() {
+        val target = backTarget
+        handler.removeCallbacks(navigationPoller)
+        navigationCover?.let { cover ->
+            runCatching { (getSystemService(WINDOW_SERVICE) as WindowManager).removeViewImmediate(cover) }
+        }
+        navigationCover = null
+        backNavigation = null
+        backTarget = null
+        GuardedScreen.backNavigationPackage = null
+        if (target != null) GuardedScreen.onBackFinished?.invoke(target)
     }
 
     private data class PendingNode(
@@ -239,6 +339,13 @@ object GuardedScreen {
 
     // Both services use the main looper. The monitor unregisters on destroy.
     var onDetected: ((String) -> Unit)? = null
+    var onBackRequested: ((String) -> Boolean)? = null
+    var onBackFinished: ((String) -> Unit)? = null
+    var backNavigationPackage: String? = null
+
+    fun requestBack(windowPackage: String): Boolean = onBackRequested?.invoke(windowPackage) == true
+
+    fun isNavigatingBack(windowPackage: String): Boolean = backNavigationPackage == windowPackage
 
     fun set(windowPackage: String) {
         pkg = windowPackage
