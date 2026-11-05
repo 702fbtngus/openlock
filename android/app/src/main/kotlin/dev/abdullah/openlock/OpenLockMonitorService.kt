@@ -174,6 +174,7 @@ class OpenLockMonitorService : Service() {
             putExtra(LockActivity.EXTRA_GUARDED_SETTINGS, guardedSettings)
         }
         GuardDiagnostics.launch("LockActivity launch requested for $packageName")
+        GuardDiagnostics.lockRequested(packageName)
         runCatching { startActivity(intent) }.onFailure {
             GuardDiagnostics.launch("LockActivity launch failed: ${it.javaClass.simpleName}: ${it.message}")
         }

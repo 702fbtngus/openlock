@@ -61,6 +61,18 @@ class SettingsProtectionMatchingTest {
             ScreenNode(null, "사용\u00a0안 함", clickable = true)))
     }
 
+    @Test fun cachedLabelsKeepCaseAndFormattingInsensitiveMatchesExact() {
+        assertTrue(guarded(title("\u200f  sPeCiAl\u202fapp\naccess  \u200e")))
+        assertFalse(guarded(title("Special app access history")))
+        assertTrue(guarded(title(service), row("\u200eIN\nUSE"),
+            ScreenNode(null, "\u200fTURN\u00a0OFF", clickable = true)))
+        assertFalse(guarded(title(service), row("IN USE"),
+            ScreenNode(null, "TURN OFF shortcut", clickable = true)))
+        val header = ScreenNode("com.android.settings:id/entity_header_title", "Chrome")
+        assertTrue(guarded(header, toggle(), row("\u200eALLOW\nUSAGE\u00a0ACCESS")))
+        assertFalse(guarded(header, toggle(), row("Allow usage access later")))
+    }
+
     @Test fun guardsSamsungStyleStatusAndDisableButtonBeforeConfirmation() {
         for ((state, action) in listOf("사용 중" to "사용 안 함", "On" to "Turn off")) {
             assertTrue(guarded(title(service), row(state),
@@ -123,10 +135,32 @@ class SettingsProtectionMatchingTest {
         assertFalse(guarded(cls = "com.android.settings.SpecialAccessSettings", pkg = "com.android.chrome"))
     }
 
+    @Test fun classFastPathRequiresDistinctiveClassInSettings() {
+        assertTrue(UninstallGuard.isSpecialAccessScreenClass(settings,
+            "com.android.settings.Settings\$AppDrawOverlaySettingsActivity"))
+        assertFalse(UninstallGuard.isSpecialAccessScreenClass("com.android.chrome",
+            "com.android.settings.Settings\$AppDrawOverlaySettingsActivity"))
+        for (cls in listOf(null, subSettings, "com.android.settings.NotSpecialAccessSettings",
+            "com.android.settings.Settings\$ManageApplicationsActivity",
+            "com.android.settings.accessibility.ToggleAccessibilityServicePreferenceFragment")) {
+            assertFalse(cls, UninstallGuard.isSpecialAccessScreenClass(settings, cls))
+        }
+    }
+
     @Test fun usesOemLocalizedResourceOnlyAsPageTitle() {
         val translation = "Autorisations spéciales"
         assertTrue(guarded(title(translation), localized = setOf(translation)))
         assertFalse(guarded(title("Apps"), row(translation), localized = setOf(translation)))
+    }
+
+    @Test fun localizedLabelCacheUpdatesWhenResourceSetChanges() {
+        val localized = mutableSetOf("Autorisations\nspéciales")
+        assertTrue(guarded(title("\u200eAUTORISATIONS\u00a0SPÉCIALES"), localized = localized))
+        localized.clear()
+        localized.add("Sonderzugriff")
+        assertTrue(guarded(title("sonderzugriff"), localized = localized))
+        assertFalse(guarded(title("Autorisations spéciales"), localized = localized))
+        assertFalse(guarded(title("Sonderzugriff")))
     }
 
     @Test fun singleAppPermissionDetailsRequireSpecificControlWithHeaderAndToggle() {

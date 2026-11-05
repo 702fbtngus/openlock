@@ -71,8 +71,8 @@ object UninstallGuard {
         "changewifistate", "changewifistatedetails", "longbackgroundtasks", "longbackgroundtasksapp",
     )
 
-    // Fallback for generic SubSettings activities. Only toolbar titles qualify,
-    // so the same strings in Apps rows/search results cannot trigger a lock.
+    // Fallback for generic SubSettings activities. Titles require the structural
+    // checks below; plain preference rows/search results cannot trigger a lock.
     internal val specialAccessTitles = setOf(
         "Special access", "Special app access", "특별한 접근", "특수 앱 액세스", "특별한 앱 액세스",
         "Display over other apps", "Draw over other apps", "Appear on top",
@@ -96,6 +96,15 @@ object UninstallGuard {
     private val ON_LABELS = setOf("On", "In use", "사용 중", "사용중", "켜짐", "已开启")
     private val OFF_ACTIONS = setOf("Off", "Turn off", "Stop", "Disable", "사용 안 함", "사용 안함", "끄기", "중지", "关闭")
 
+    // A Settings content event can arrive repeatedly while a page is loading.
+    // Normalize fixed labels once, rather than running both regexes for every
+    // candidate/label pair on the accessibility service's main thread.
+    private val normalizedSpecialAccessTitles = specialAccessTitles.map(::normalizeText)
+    private val normalizedSpecialAccessControls = SPECIAL_ACCESS_CONTROLS.map(::normalizeText)
+    private val normalizedOnLabels = ON_LABELS.map(::normalizeText)
+    private val normalizedOffActions = OFF_ACTIONS.map(::normalizeText)
+    @Volatile private var localizedTitleCache: Pair<Set<String>, List<String>> = emptySet<String>() to emptyList()
+
     fun isPageTitle(node: ScreenNode): Boolean = node.inToolbar ||
         node.viewId?.substringAfter(":id/") in PAGE_TITLE_IDS ||
         // OEM/Compose headers may expose no toolbar ID. Exclude collection
@@ -117,19 +126,17 @@ object UninstallGuard {
         if (windowPackage != SETTINGS_PACKAGE) return false
         // A distinctive activity/fragment name is useful even before its text
         // loads. Generic host activities are deliberately absent from the set.
-        val screen = windowClass?.substringAfterLast('.')?.substringAfterLast('$')
-            ?.lowercase()?.removeSuffix("activity")
-        if (screen in SPECIAL_ACCESS_SCREENS) return true
+        if (isSpecialAccessScreenClass(windowPackage, windowClass)) return true
         val titles = nodes.filter(::isPageTitle).mapNotNull { it.text } + nodes.mapNotNull { it.paneTitle }
-        val specialTitles = specialAccessTitles + localizedSpecialAccessTitles
+        val localizedTitles = normalizedLocalizedTitles(localizedSpecialAccessTitles)
         if (titles.any { title ->
-                specialTitles.any { sameText(title, it) }
+                matchesNormalizedText(title, normalizedSpecialAccessTitles, localizedTitles)
             }) return true
 
         val singleAppHeader = nodes.any { it.viewId?.endsWith(":id/entity_header_title") == true }
         val toggle = nodes.any { it.checkable || it.viewId?.substringAfter(":id/") in TOGGLE_IDS }
         if (singleAppHeader && toggle && nodes.any { node ->
-                SPECIAL_ACCESS_CONTROLS.any { sameText(node.text.orEmpty(), it) }
+                matchesNormalizedText(node.text, normalizedSpecialAccessControls)
             }) return true
 
         // Fallback if a very fast tap opens the disable confirmation first.
@@ -146,15 +153,23 @@ object UninstallGuard {
         val namesOurService = nodes.any { sameText(it.text.orEmpty(), ownServiceLabel) ||
             sameText(it.paneTitle.orEmpty(), ownServiceLabel) }
         if (!namesOurService) return false
-        if (screen in ACCESSIBILITY_DETAILS) return true
+        if (screenName(windowClass) in ACCESSIBILITY_DETAILS) return true
         if (titles.none { sameText(it, ownServiceLabel) }) return false
-        val hasOnState = nodes.any { node -> ON_LABELS.any { sameText(node.text.orEmpty(), it) } }
+        val hasOnState = nodes.any { node -> matchesNormalizedText(node.text, normalizedOnLabels) }
         val hasOffButton = nodes.any { node ->
             (node.clickable || node.className?.endsWith("Button") == true) &&
-                OFF_ACTIONS.any { sameText(node.text.orEmpty(), it) }
+                matchesNormalizedText(node.text, normalizedOffActions)
         }
         return toggle || (hasOnState && hasOffButton)
     }
+
+    /** Only distinctive Settings classes qualify without a loaded node tree. */
+    fun isSpecialAccessScreenClass(windowPackage: String, windowClass: String?): Boolean =
+        windowPackage == SETTINGS_PACKAGE && screenName(windowClass) in SPECIAL_ACCESS_SCREENS
+
+    private fun screenName(windowClass: String?): String? =
+        windowClass?.substringAfterLast('.')?.substringAfterLast('$')
+            ?.lowercase()?.removeSuffix("activity")
 
     /** Packages whose windows can host a screen that removes OpenLock. */
     fun isCandidatePackage(pkg: String): Boolean =
@@ -202,6 +217,27 @@ object UninstallGuard {
 
     private fun sameText(text: String, label: String): Boolean =
         normalizeText(text).equals(normalizeText(label), ignoreCase = true)
+
+    private fun matchesNormalizedText(
+        text: String?,
+        labels: List<String>,
+        extraLabels: List<String> = emptyList(),
+    ): Boolean {
+        if (text == null) return false
+        val normalized = normalizeText(text)
+        return labels.any { normalized.equals(it, ignoreCase = true) } ||
+            extraLabels.any { normalized.equals(it, ignoreCase = true) }
+    }
+
+    private fun normalizedLocalizedTitles(titles: Set<String>): List<String> {
+        val cached = localizedTitleCache
+        if (cached.first == titles) return cached.second
+        // Keep a snapshot so a caller changing its set cannot leave stale labels.
+        val snapshot = titles.toSet()
+        val normalized = snapshot.map(::normalizeText)
+        localizedTitleCache = snapshot to normalized
+        return normalized
+    }
 
     // Samsung can insert line breaks, non-breaking spaces or bidi marks in a
     // rendered title. These formatting differences do not change its identity.

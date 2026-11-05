@@ -91,6 +91,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
 
     @Suppress("DEPRECATION")
     private fun inspectWindow(eventPaneTitle: String? = null, eventPackage: String? = null, eventWindowId: Int = -1) {
+        val scanStartedAt = SystemClock.elapsedRealtime()
         val root = rootInActiveWindow
         if (root == null) {
             GuardedScreen.clear()
@@ -110,22 +111,36 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                 return
             }
             val cls = windowClass.takeIf { windowPackage == rootPkg && windowId == root.windowId }
-            val nodes = flatten(root).toMutableList()
+            val initialNodes = ArrayList<ScreenNode>()
             if (eventPaneTitle != null && eventPackage == rootPkg && eventWindowId == root.windowId) {
-                nodes.add(ScreenNode(null, null, paneTitle = eventPaneTitle))
+                initialNodes.add(ScreenNode(null, null, paneTitle = eventPaneTitle))
             }
-            val guarded = UninstallGuard.isGuardedScreen(
+            fun matches(nodes: List<ScreenNode>) = UninstallGuard.isGuardedScreen(
                 windowPackage = rootPkg,
                 windowClass = cls,
                 nodes = nodes,
                 ownLabel = ownLabel,
                 ownPackage = packageName,
                 ownServiceLabel = serviceLabel,
-                localizedSpecialAccessTitles = localizedTitles,
+                localizedSpecialAccessTitles = if (rootPkg == UninstallGuard.SETTINGS_PACKAGE) localizedTitles else emptySet(),
             )
+            // These are the SAME positive rules as the full matcher. A known
+            // class or confirmed pane title can prove a match without a walk.
+            var guarded = UninstallGuard.isSpecialAccessScreenClass(rootPkg, cls) ||
+                (initialNodes.isNotEmpty() && matches(initialNodes))
+            val nodes = if (guarded) initialNodes else flatten(root, initialNodes) { partial ->
+                // All positive rules require only accumulated evidence; extra
+                // descendants cannot invalidate a match. Negative results still
+                // require the complete bounded walk, including Back navigation.
+                guarded = matches(partial)
+                guarded
+            }
+            if (!guarded) guarded = matches(nodes)
+            val matchedAt = SystemClock.elapsedRealtime()
+            GuardDiagnostics.scan(rootPkg, scanStartedAt, matchedAt, guarded)
             advanceBackNavigation(rootPkg, guarded, nodes.isNotEmpty())
             if (guarded) GuardedScreen.set(rootPkg) else GuardedScreen.clear()
-            captureDiagnostics(rootPkg, cls, root.windowId, nodes, guarded)
+            captureDiagnostics(rootPkg, cls, root.windowId, nodes, guarded, matchedAt - scanStartedAt)
             logDiagnostics(rootPkg, cls, nodes, guarded)
         } catch (error: RuntimeException) {
             // A transitioning Settings tree can become invalid while walking it.
@@ -235,11 +250,16 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     )
 
     @Suppress("DEPRECATION")
-    private fun flatten(root: AccessibilityNodeInfo): List<ScreenNode> {
-        val out = ArrayList<ScreenNode>()
+    private fun flatten(
+        root: AccessibilityNodeInfo,
+        initialNodes: List<ScreenNode>,
+        shouldStop: (List<ScreenNode>) -> Boolean,
+    ): List<ScreenNode> {
+        val out = ArrayList(initialNodes)
         val stack = ArrayDeque<PendingNode>()
         stack.addLast(PendingNode(root, false, false, false))
         var visited = 0
+        var nextMatchCheck = MATCH_CHECK_INTERVAL
         try {
             while (stack.isNotEmpty() && visited++ < MAX_NODES) {
                 val (node, parentToolbar, clickableParent, parentList) = stack.removeLast()
@@ -269,6 +289,16 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                     } else if (pane != null) {
                         out.add(ScreenNode(id, null, cls, paneTitle = pane))
                     }
+                    // Check early headers frequently, then widen the interval
+                    // (32/64/128/...) so negative screens are not rescanned 75
+                    // times. The caller always checks the final accumulated tree.
+                    if (visited == 1 || visited >= nextMatchCheck) {
+                        if (shouldStop(out)) return out
+                        if (visited >= nextMatchCheck) {
+                            nextMatchCheck = if (nextMatchCheck < 32) nextMatchCheck + MATCH_CHECK_INTERVAL
+                                else nextMatchCheck * 2
+                        }
+                    }
                     for (i in node.childCount - 1 downTo 0) {
                         node.getChild(i)?.let { stack.addLast(PendingNode(it, inToolbar, clickable, inList)) }
                     }
@@ -282,9 +312,10 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         return out
     }
 
-    private fun captureDiagnostics(pkg: String, cls: String?, id: Int, nodes: List<ScreenNode>, guarded: Boolean) {
+    private fun captureDiagnostics(pkg: String, cls: String?, id: Int, nodes: List<ScreenNode>, guarded: Boolean, scanMs: Long) {
         if (!GuardDiagnostics.isCapturing()) return
-        val summary = "package=$pkg class=$cls windowId=$id guarded=$guarded nodes=${nodes.size}"
+        val summary = "package=$pkg class=$cls windowId=$id guarded=$guarded nodesRead=${nodes.size} scanMs=$scanMs " +
+            "(positive scans may stop early)"
         val titleKey = nodes.filter { UninstallGuard.isPageTitle(it) || it.paneTitle != null }
             .take(12).joinToString { (it.paneTitle ?: it.text.orEmpty()).take(120) }
         val snapshot = buildString {
@@ -323,6 +354,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     private companion object {
         const val TAG = "OpenLockGuard"
         const val MAX_NODES = 600
+        const val MATCH_CHECK_INTERVAL = 8
         val TOOLBAR_IDS = setOf("action_bar", "toolbar", "collapsing_toolbar", "action_bar_container")
         val TITLE_RESOURCES = listOf(
             "special_access", "special_access_title", "special_access_settings_title",
