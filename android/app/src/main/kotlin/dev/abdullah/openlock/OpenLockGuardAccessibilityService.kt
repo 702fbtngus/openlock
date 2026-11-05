@@ -2,7 +2,7 @@ package dev.abdullah.openlock
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
-import android.graphics.Color
+import android.content.res.ColorStateList
 import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.Build
@@ -12,7 +12,8 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import android.widget.TextView
+import android.widget.FrameLayout
+import android.widget.ProgressBar
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -172,13 +173,19 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     private fun startBackNavigation(pkg: String): Boolean {
         if (pkg != UninstallGuard.SETTINGS_PACKAGE) return false
         if (backNavigation != null) return backTarget == pkg
-        val cover = TextView(this).apply {
-            setBackgroundColor(Color.rgb(18, 20, 24))
-            setTextColor(Color.WHITE)
-            text = getString(R.string.guard_returning_to_previous_screen)
-            gravity = Gravity.CENTER
+        val palette = LockPalette.resolve(this)
+        val indicatorSize = (32 * resources.displayMetrics.density).toInt()
+        val cover = FrameLayout(this).apply {
+            setBackgroundColor(palette.background)
             isClickable = true
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            addView(
+                ProgressBar(this@OpenLockGuardAccessibilityService).apply {
+                    isIndeterminate = true
+                    indeterminateTintList = ColorStateList.valueOf(palette.accent)
+                },
+                FrameLayout.LayoutParams(indicatorSize, indicatorSize, Gravity.CENTER),
+            )
         }
         // A non-focusable accessibility overlay blocks touches while keeping
         // the underlying Settings window available for global Back/inspection.

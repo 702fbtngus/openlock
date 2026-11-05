@@ -1,10 +1,10 @@
 import 'package:core_theme/core_theme.dart';
-import 'package:core_ui/core_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openlock/src/core/di.dart';
 import 'package:openlock/src/core/interfaces/enforcement_bridge.dart';
+import 'package:openlock/src/core/widgets/screen_header.dart';
 import 'package:openlock/src/features/enforcement/providers/config_providers.dart';
 import 'package:openlock/src/features/onboarding/screens/onboarding_screen.dart';
 import 'package:openlock/src/features/onboarding/screens/permissions_screen.dart';
