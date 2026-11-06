@@ -23,6 +23,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     private var windowPackage: String? = null
     private var windowClass: String? = null
     private var windowId = -1
+    private var windowEventTiming: GuardDiagnostics.EventTiming? = null
     private val handler = Handler(Looper.getMainLooper())
     private val scanThread = HandlerThread("OpenLock-settings-scan").apply { start() }
     private val scanHandler = Handler(scanThread.looper)
@@ -64,16 +65,20 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        val eventTiming = GuardDiagnostics.event(
+            "type=${event.eventType} package=${event.packageName} " +
+                "class=${event.className} windowId=${event.windowId} changes=${event.contentChangeTypes}",
+            event.packageName?.toString(), event.windowId, event.eventType, event.eventTime)
         if (!OpenLockMonitorService.isRunning) MonitorStartup.restoreAsync(this, "accessibility_event")
-        GuardDiagnostics.event("type=${event.eventType} package=${event.packageName} " +
-            "class=${event.className} windowId=${event.windowId} changes=${event.contentChangeTypes}")
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                if (detectServiceEntryClick(event)) scheduleRechecks()
+                if (detectServiceEntryClick(event, eventTiming)) scheduleRechecks()
                 return
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                GuardedScreen.windowChanged()
                 windowEpoch++
+                windowEventTiming = eventTiming
                 windowPackage = event.packageName?.toString()
                 windowClass = event.className?.toString()
                 windowId = event.windowId
@@ -82,6 +87,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 if (event.packageName?.toString()?.let(UninstallGuard::isCandidatePackage) != true) return
+                windowEventTiming = eventTiming
             }
             else -> return
         }
@@ -93,10 +99,10 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         val paneTitle = if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && paneChange) {
             event.text.firstOrNull()?.toString()
         } else null
-        inspectWindow(paneTitle, event.packageName?.toString(), event.windowId)
+        inspectWindow(paneTitle, event.packageName?.toString(), event.windowId, eventTiming)
     }
 
-    private fun detectServiceEntryClick(event: AccessibilityEvent): Boolean {
+    private fun detectServiceEntryClick(event: AccessibilityEvent, eventTiming: GuardDiagnostics.EventTiming?): Boolean {
         if (event.packageName?.toString() != UninstallGuard.SETTINGS_PACKAGE ||
             windowPackage != UninstallGuard.SETTINGS_PACKAGE || event.windowId != windowId ||
             event.isPassword) return false
@@ -108,10 +114,11 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         val node = ScreenNode(null, event.contentDescription?.toString(), className = cls)
         if (!UninstallGuard.isOwnServiceEntryClick(UninstallGuard.SETTINGS_PACKAGE,
                 node, event.text.map { it.toString() }, serviceLabel)) return false
-        GuardDiagnostics.scan(UninstallGuard.SETTINGS_PACKAGE, startedAt, SystemClock.elapsedRealtime(), true)
+        val timing = GuardDiagnostics.scan(UninstallGuard.SETTINGS_PACKAGE, startedAt, SystemClock.elapsedRealtime(), true,
+            event = eventTiming, source = "service-entry-click")
         GuardDiagnostics.snapshot("service-entry-click", "Own accessibility entry clicked; requesting lock before detail controls load.")
         windowEpoch++ // Invalidate an older list scan still in progress.
-        GuardedScreen.set(UninstallGuard.SETTINGS_PACKAGE)
+        GuardedScreen.set(UninstallGuard.SETTINGS_PACKAGE, timing)
         return true
     }
 
@@ -121,7 +128,8 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         for (delay in longArrayOf(75L, 200L, 500L)) handler.postDelayed(recheck, delay)
     }
 
-    private fun inspectWindow(eventPaneTitle: String? = null, eventPackage: String? = null, eventWindowId: Int = -1) {
+    private fun inspectWindow(eventPaneTitle: String? = null, eventPackage: String? = null,
+                              eventWindowId: Int = -1, eventTiming: GuardDiagnostics.EventTiming? = windowEventTiming) {
         if (destroyed) return
         val epoch = windowEpoch
         val queuedAt = SystemClock.elapsedRealtime()
@@ -134,7 +142,8 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         scanHandler.post scan@{
             if (epoch != windowEpoch) return@scan
             val result = readWindow(eventPaneTitle, eventPackage, eventWindowId,
-                expectedPackage, expectedClass, expectedId, epoch).copy(queuedAt = queuedAt)
+                expectedPackage, expectedClass, expectedId, epoch).copy(queuedAt = queuedAt,
+                    event = eventTiming)
             handler.post {
                 if (!destroyed && epoch == windowEpoch) applyInspection(result)
             }
@@ -152,6 +161,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         val queuedAt: Long = startedAt,
         val finishedAt: Long = SystemClock.elapsedRealtime(),
         val reason: String? = null,
+        val event: GuardDiagnostics.EventTiming? = null,
     )
 
     @Suppress("DEPRECATION")
@@ -216,10 +226,11 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     /** Only immutable scan data crosses threads; all UI/session state stays here. */
     private fun applyInspection(result: Inspection) {
         val pkg = result.pkg
-        if (pkg != null) GuardDiagnostics.scan(pkg, result.startedAt, result.finishedAt,
-            result.guarded, result.queuedAt)
+        val timing = if (pkg != null) GuardDiagnostics.scan(pkg, result.startedAt, result.finishedAt,
+            result.guarded, result.queuedAt,
+            event = result.event?.takeIf { it.pkg == pkg && it.windowId == result.id }) else null
         advanceBackNavigation(pkg, result.guarded, result.contentReady)
-        if (result.guarded && pkg != null) GuardedScreen.set(pkg) else GuardedScreen.clear()
+        if (result.guarded && pkg != null) GuardedScreen.set(pkg, timing) else GuardedScreen.clear()
         if (result.reason != null) {
             if (pkg != packageName) GuardDiagnostics.snapshot("read:$pkg", result.reason)
         } else if (pkg != null) {
@@ -230,6 +241,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
+        GuardedScreen.windowChanged()
         windowEpoch++
         scanHandler.removeCallbacksAndMessages(null)
         if (backNavigation != null) performGlobalAction(GLOBAL_ACTION_HOME)
@@ -239,6 +251,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        GuardedScreen.windowChanged()
         destroyed = true
         windowEpoch++
         scanHandler.removeCallbacksAndMessages(null)
@@ -463,6 +476,15 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
 /** Current guarded OS window, shared with the monitor in this process. */
 object GuardedScreen {
     @Volatile private var pkg: String? = null
+    @Volatile var windowRevision: Long = 0L
+        private set
+    private var timing: GuardDiagnostics.DetectionTiming? = null
+
+    /** Main-thread notification; invalidates usage queries for a previous window. */
+    fun windowChanged() { windowRevision++ }
+
+    fun timingFor(windowPackage: String): GuardDiagnostics.DetectionTiming? =
+        timing.takeIf { pkg == windowPackage }
 
     // Both services use the main looper. The monitor unregisters on destroy.
     var onDetected: ((String) -> Unit)? = null
@@ -474,13 +496,15 @@ object GuardedScreen {
 
     fun isNavigatingBack(windowPackage: String): Boolean = backNavigationPackage == windowPackage
 
-    fun set(windowPackage: String) {
+    fun set(windowPackage: String, detection: GuardDiagnostics.DetectionTiming? = null) {
         pkg = windowPackage
+        timing = detection
         onDetected?.invoke(windowPackage)
     }
 
     fun clear() {
         pkg = null
+        timing = null
     }
 
     fun isShowing(windowPackage: String): Boolean = pkg == windowPackage

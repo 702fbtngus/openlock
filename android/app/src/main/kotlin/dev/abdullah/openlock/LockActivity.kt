@@ -18,11 +18,13 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -74,6 +76,8 @@ class LockActivity : FragmentActivity() {
     /** Every keypad key, for sizing and for dimming during a cooldown. */
     private val keys = mutableListOf<View>()
     private val handler = Handler(Looper.getMainLooper())
+    private var firstDrawObserver: ViewTreeObserver? = null
+    private var firstDrawListener: ViewTreeObserver.OnDrawListener? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -115,6 +119,7 @@ class LockActivity : FragmentActivity() {
         visiblePackage = lockedPackage
         GuardDiagnostics.launch("LockActivity resumed for $lockedPackage")
         GuardDiagnostics.lockResumed(lockedPackage)
+        observeFirstDraw()
         // Auto-trigger the biometric prompt once every time the real lock
         // screen appears (deterministic; the in-flight guard prevents the
         // onCreate + onResume pair from stacking two prompts).
@@ -139,8 +144,37 @@ class LockActivity : FragmentActivity() {
     }
 
     override fun onPause() {
+        clearFirstDrawObserver()
         visiblePackage = null
         super.onPause()
+    }
+
+    private fun observeFirstDraw() {
+        clearFirstDrawObserver()
+        if (!GuardDiagnostics.isCapturing()) return
+        val target = lockedPackage
+        val observer = window.decorView.viewTreeObserver
+        val listener = object : ViewTreeObserver.OnDrawListener {
+            private var recorded = false
+            override fun onDraw() {
+                if (recorded) return
+                recorded = true
+                GuardDiagnostics.lockDrawn(target, SystemClock.elapsedRealtime())
+                // Removing a listener during onDraw is forbidden by Android.
+                handler.post { if (firstDrawListener === this) clearFirstDrawObserver() }
+            }
+        }
+        firstDrawObserver = observer
+        firstDrawListener = listener
+        observer.addOnDrawListener(listener)
+    }
+
+    private fun clearFirstDrawObserver() {
+        val observer = firstDrawObserver
+        val listener = firstDrawListener
+        if (observer?.isAlive == true && listener != null) observer.removeOnDrawListener(listener)
+        firstDrawObserver = null
+        firstDrawListener = null
     }
 
     private fun cancelLock() {

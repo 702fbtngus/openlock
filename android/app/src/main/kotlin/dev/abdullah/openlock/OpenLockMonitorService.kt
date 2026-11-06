@@ -13,8 +13,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import java.util.Calendar
 import java.util.concurrent.ConcurrentHashMap
 
@@ -28,6 +30,9 @@ class OpenLockMonitorService : Service() {
     private lateinit var store: ConfigStore
     private lateinit var usageStatsManager: UsageStatsManager
     private val handler = Handler(Looper.getMainLooper())
+    private val usageThread = HandlerThread("OpenLock-usage-poll").apply { start() }
+    private val usageHandler = Handler(usageThread.looper)
+    private val pollSession = ForegroundPollSession()
 
     private val leftAppAt = ConcurrentHashMap<String, Long>()
     @Volatile private var screenOffAt: Long = 0L
@@ -43,15 +48,36 @@ class OpenLockMonitorService : Service() {
         }
     }
 
-    private val poller = object : Runnable {
-        override fun run() {
-            try {
-                tick()
-            } catch (_: Exception) {
-                // Never let a transient failure kill the loop.
+    private fun startPolling() {
+        val ticket = pollSession.start()
+        usageHandler.removeCallbacksAndMessages(null)
+        usageHandler.post(object : Runnable {
+            override fun run() {
+                if (!pollSession.isCurrent(ticket)) return
+                val window = GuardedScreen.windowRevision
+                val startedAt = SystemClock.elapsedRealtime()
+                var error: String? = null
+                val current = try { foregroundApp() } catch (failure: Exception) {
+                    error = failure.javaClass.simpleName
+                    null
+                }
+                val finishedAt = SystemClock.elapsedRealtime()
+                handler.post deliver@{
+                    if (!pollSession.isCurrent(ticket)) return@deliver
+                    val accepted = pollSession.canApply(ticket, window, GuardedScreen.windowRevision)
+                    try {
+                        GuardDiagnostics.usagePoll(startedAt, finishedAt, accepted, error)
+                        if (accepted && current != null) tick(current)
+                    } catch (_: Exception) {
+                        // Keep the polling fallback alive after transient errors.
+                    } finally {
+                        // Schedule only after delivery: at most one query/result
+                        // is in flight, even when the main looper is busy.
+                        if (pollSession.isCurrent(ticket)) usageHandler.postDelayed(this, POLL_INTERVAL_MS)
+                    }
+                }
             }
-            handler.postDelayed(this, POLL_INTERVAL_MS)
-        }
+        })
     }
 
     override fun onCreate() {
@@ -85,25 +111,25 @@ class OpenLockMonitorService : Service() {
         MonitorStartup.setEnabled(this, true)
         MonitorStartup.record(this, "monitor running")
         isRunning = true
-        handler.removeCallbacks(poller)
-        handler.post(poller)
+        startPolling()
         return START_STICKY
     }
 
     override fun onDestroy() {
         isRunning = false
+        pollSession.stop()
+        usageHandler.removeCallbacksAndMessages(null)
+        usageThread.quitSafely()
         MonitorStartup.record(this, "monitor destroyed")
         GuardedScreen.onDetected = null
         GuardedScreen.onBackFinished = null
-        handler.removeCallbacks(poller)
         runCatching { unregisterReceiver(screenReceiver) }
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun tick() {
-        val current = foregroundApp() ?: return
+    private fun tick(current: String) {
         val now = System.currentTimeMillis()
 
         // Track departures from the foreground for the relock policy.
@@ -116,7 +142,7 @@ class OpenLockMonitorService : Service() {
         // Once the user is in an app, its hidden-notification backlog is stale —
         // clear OpenLock's redacted notice for it. (No-op when the listener is
         // off or nothing was hidden.)
-        OpenLockNotificationListenerService.onAppForegrounded(current)
+        usageHandler.post { OpenLockNotificationListenerService.onAppForegrounded(current) }
 
         // Never lock ourselves.
         if (current == packageName) return
@@ -170,12 +196,14 @@ class OpenLockMonitorService : Service() {
         if (!stillUnlocked && !debounced) {
             lastLaunchedPkg = current
             lastLaunchAt = now
-            launchLock(current, guardedSettings = current == UninstallGuard.SETTINGS_PACKAGE)
+            launchLock(current, guardedSettings = current == UninstallGuard.SETTINGS_PACKAGE,
+                timing = GuardedScreen.timingFor(current))
         }
         return true
     }
 
-    private fun launchLock(packageName: String, guardedSettings: Boolean = false) {
+    private fun launchLock(packageName: String, guardedSettings: Boolean = false,
+                           timing: GuardDiagnostics.DetectionTiming? = null) {
         val intent = Intent(this, LockActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
@@ -183,7 +211,7 @@ class OpenLockMonitorService : Service() {
             putExtra(LockActivity.EXTRA_GUARDED_SETTINGS, guardedSettings)
         }
         GuardDiagnostics.launch("LockActivity launch requested for $packageName")
-        GuardDiagnostics.lockRequested(packageName)
+        GuardDiagnostics.lockRequested(packageName, timing)
         runCatching { startActivity(intent) }.onFailure {
             GuardDiagnostics.launch("LockActivity launch failed: ${it.javaClass.simpleName}: ${it.message}")
         }
@@ -193,7 +221,7 @@ class OpenLockMonitorService : Service() {
     private fun foregroundApp(): String? {
         val end = System.currentTimeMillis()
         val begin = end - LOOKBACK_MS
-        val events = usageStatsManager.queryEvents(begin, end)
+        val events = usageStatsManager.queryEvents(begin, end) ?: return null
         var pkg: String? = null
         val event = UsageEvents.Event()
         while (events.hasNextEvent()) {

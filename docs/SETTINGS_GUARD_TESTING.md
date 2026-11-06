@@ -1,5 +1,52 @@
 # 설정 화면 보호 변경 및 기기 테스트
 
+## 간헐적인 지연: 여섯 번째 수정
+
+새 삼성 보고서의 마지막 기록은 `queueWaitMs=0`, `inspectToMatchMs=7`,
+`matchToRequestMs=88`, `requestToResumeMs=9`였다. 클릭 조기 감지도 기록됐다.
+이 값만으로 느렸던 모든 진입이나 화면 표시까지의 총 지연을 설명할 수는 없다.
+
+- 사용 기록 조회(`queryEvents` 및 이벤트 순회)를 전용 작업 스레드로 옮긴다.
+  알림 정리 시스템 호출도 이 스레드에서 처리한다. 느린 시스템 응답 때문에
+  메인 스레드의 접근성 이벤트·즉시 잠금·PIN 그리기가 기다리지 않도록 한다.
+- 300ms 보조 폴링을 유지한다. 결과 적용 후 다음 조회를 예약해 조회/결과를
+  한 번에 하나만 처리한다. 서비스 중지/재시작이나 접근성에서 보고된 창 전환
+  이전의 결과는 적용하지 않는다. PIN 실행·인증·debounce 상태는 메인 스레드에 둔다.
+- 진단을 시작했을 때만 이벤트 전달 지연, 느린 사용 기록 조회, 최근 잠금 요청/
+  재개/첫 그리기 이력을 각각 최대 16행 보관한다. 마지막 정상 기록이 이전의
+  느린 기록을 덮어쓰는 것을 줄인다. 자동 중지와 메모리 내 저장 정책은 유지한다.
+- 검사 결과의 시간 정보를 해당 보호 화면에 직접 연결한다. 기존 250ms 제한으로
+  느린 검사와 실행 요청의 연결이 끊기던 진단의 빈틈을 없앤다.
+- 현재 진단 버전은 **settings-guard-6**이다.
+
+| 항목 | 측정 범위 |
+| --- | --- |
+| eventDeliveryMs | 이벤트의 OS 시각 → 접근성 콜백 수신. 이벤트 시각이 없거나 유효하지 않으면 unknown |
+| eventToRequestMs | 해당 콜백 수신 → 잠금 요청. 재검사면 재검사를 유발한 이벤트 기준 |
+| queueWaitMs | 검사 예약 → 검사 스레드 시작 |
+| inspectToMatchMs | 검사 시작 → 보호 화면 판정 |
+| scanToMainMs | 판정 완료 → 결과의 메인 스레드 전달 |
+| matchToRequestMs | 판정 완료 → 잠금 요청. scanToMainMs를 포함 |
+| requestToResumeMs | 잠금 요청 → LockActivity 재개 |
+| requestToFirstDrawMs | 잠금 요청 → Activity의 첫 onDraw 콜백. GPU 표시 완료 시각은 아님 |
+| queryMs / deliveryToMainMs | 보조 사용 기록 조회 시간 / 조회 결과의 메인 스레드 전달 대기 |
+
+이벤트 시간 차이는 uptime, 검사·실행 시간 차이는 elapsedRealtime을 사용한다.
+측정값은 물리적인 터치부터 화면 픽셀 표시까지의 총 시간으로 합산하지 않는다.
+OEM이 이벤트를 만들기 전의 지연, 실제 화면에 픽셀이 표시되는 시점은 직접 측정하지 않는다.
+`source=service-entry-click`과 `source=window-scan`을 구분한다.
+
+실기기에서는 진단을 새로 시작하고, 인증 세션이 잠긴 상태에서 System Service 진입을
+5~10회 반복한다. PIN에서 뒤로가기로 취소하고 같은 상세 화면에 재진입하면
+인증 없이도 여러 번 비교할 수 있다. 느린 순간이 포함되면 `Recent lock requests/resumes`,
+`Recent Settings window/click/slow events`, `Slow usage polls`를 함께 확인한다.
+서비스 중지/재시작, 일반 앱 잠금, 스케줄, 알림 내용 숨김, 다른 앱으로 빠른 전환,
+삭제/설정 보호와 PIN 뒤로가기 흐름도 확인한다.
+
+`ForegroundPollSessionTest`는 중지·재시작·창 전환 후 오래된 결과 배제를,
+`GuardTimingTest`는 지연 구간 계산 및 250ms를 넘는 기록 보존을 검사한다.
+로컬 Java/Flutter SDK가 없어 테스트/빌드는 Actions에서, 실제 개선 폭은 기기에서 확인해야 한다.
+
 ## 삼성 접근성 화면 지연: 다섯 번째 수정
 
 실제 삼성 진단에서 설치된 앱 목록 검사 한 번에 `scanMs=1537`이 기록됐다.
@@ -124,7 +171,7 @@ pane 제목 이벤트는 현재 창 ID가 일치하는 즉시 검사에만 사�
    **openlock-preview-apk** Artifact를 내려받아 설치한다.
    앱 내부의 업데이트 다운로드는 공식 릴리스를 받을 수 있으므로 이번 커밋의 Artifact를 사용한다.
 2. OpenLock → Settings → Advanced → **설정 보호 진단**을 연다.
-   보고서 첫 줄에 **settings-guard-5**와 빌드 커밋 앞 12자리가 표시되어야 한다.
+   보고서 첫 줄에 **settings-guard-6**와 빌드 커밋 앞 12자리가 표시되어야 한다.
    이 메뉴가 없다면 이번 수정이 포함된 APK가 아니다.
 3. **진단 시작** → **닫기**를 누른다. 이때 인증 세션/잠금 정책은 바꾸지 않는다.
 4. 화면을 껐다 켠 다음 문제의 특별한 접근 화면을 연다. OpenLock으로 돌아와
