@@ -1,7 +1,6 @@
 import 'package:uuid/uuid.dart';
 
-/// A Focus Schedule: a recurring time window during which a chosen set of apps
-/// is locked — e.g. lock social apps 09:00–17:00 on weekdays.
+/// A recurring time window for selected apps or a phone-wide PIN requirement.
 ///
 /// Times are stored as minutes-since-midnight in the device's *local* wall
 /// clock, and weekdays follow Dart's `DateTime.weekday` (1 = Monday … 7 =
@@ -16,6 +15,7 @@ final class LockSchedule {
     required this.startMinutes,
     required this.endMinutes,
     this.enabled = true,
+    this.lockPhone = false,
   }) : id = id ?? const Uuid().v4();
 
   final String id;
@@ -33,6 +33,10 @@ final class LockSchedule {
 
   final bool enabled;
 
+  /// Require a phone-wide PIN instead of locking a fixed list of apps.
+  /// This is an app-level lock, not Android kiosk mode.
+  final bool lockPhone;
+
   /// A window that wraps past midnight (e.g. 22:00 → 06:00). A zero-length
   /// window (start == end) is treated as "all day", not overnight.
   bool get isOvernight => endMinutes < startMinutes;
@@ -48,6 +52,7 @@ final class LockSchedule {
     int? startMinutes,
     int? endMinutes,
     bool? enabled,
+    bool? lockPhone,
   }) =>
       LockSchedule(
         id: id,
@@ -57,6 +62,7 @@ final class LockSchedule {
         startMinutes: startMinutes ?? this.startMinutes,
         endMinutes: endMinutes ?? this.endMinutes,
         enabled: enabled ?? this.enabled,
+        lockPhone: lockPhone ?? this.lockPhone,
       );
 
   Map<String, dynamic> toJson() => {
@@ -67,6 +73,7 @@ final class LockSchedule {
         'startMinutes': startMinutes,
         'endMinutes': endMinutes,
         'enabled': enabled,
+        'lockPhone': lockPhone,
       };
 
   factory LockSchedule.fromJson(Map<String, dynamic> json) => LockSchedule(
@@ -81,5 +88,6 @@ final class LockSchedule {
         startMinutes: (json['startMinutes'] as num?)?.toInt() ?? 0,
         endMinutes: (json['endMinutes'] as num?)?.toInt() ?? 0,
         enabled: json['enabled'] as bool? ?? true,
+        lockPhone: json['lockPhone'] as bool? ?? false,
       );
 }

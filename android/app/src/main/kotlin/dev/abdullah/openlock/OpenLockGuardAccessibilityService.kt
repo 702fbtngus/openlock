@@ -99,7 +99,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                 return
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                GuardedScreen.windowChanged()
+                GuardedScreen.windowChanged(event.packageName?.toString())
                 windowEpoch++
                 windowEventTiming = eventTiming
                 windowPackage = event.packageName?.toString()
@@ -535,7 +535,10 @@ object GuardedScreen {
     private var timing: GuardDiagnostics.DetectionTiming? = null
 
     /** Main-thread notification; invalidates usage queries for a previous window. */
-    fun windowChanged() { windowRevision++ }
+    fun windowChanged(windowPackage: String? = null) {
+        windowRevision++
+        onWindowChanged?.invoke(windowPackage)
+    }
 
     fun timingFor(windowPackage: String): GuardDiagnostics.DetectionTiming? =
         timing.takeIf { pkg == windowPackage }
@@ -545,6 +548,7 @@ object GuardedScreen {
     var onBackRequested: ((String) -> Boolean)? = null
     var onBackFinished: ((String) -> Unit)? = null
     var shouldWatchSettings: (() -> Boolean)? = null
+    var onWindowChanged: ((String?) -> Unit)? = null
     var backNavigationPackage: String? = null
 
     fun requestBack(windowPackage: String): Boolean = onBackRequested?.invoke(windowPackage) == true

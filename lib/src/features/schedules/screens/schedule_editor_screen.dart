@@ -26,6 +26,8 @@ class _ScheduleEditorScreenState extends ConsumerState<ScheduleEditorScreen> {
   int _start = 9 * 60;
   int _end = 17 * 60;
   Set<String> _packages = {};
+  bool _lockPhone = false;
+  bool _enabled = true;
   bool _initialized = false;
 
   @override
@@ -49,6 +51,8 @@ class _ScheduleEditorScreenState extends ConsumerState<ScheduleEditorScreen> {
       _start = existing.startMinutes;
       _end = existing.endMinutes;
       _packages = Set.of(existing.packages);
+      _lockPhone = existing.lockPhone;
+      _enabled = existing.enabled;
     }
     _initialized = true;
   }
@@ -80,6 +84,8 @@ class _ScheduleEditorScreenState extends ConsumerState<ScheduleEditorScreen> {
       weekdays: _weekdays,
       startMinutes: _start,
       endMinutes: _end,
+      lockPhone: _lockPhone,
+      enabled: _enabled,
     );
     await ref.read(configControllerProvider.notifier).upsertSchedule(schedule);
     if (mounted) context.pop();
@@ -170,69 +176,102 @@ class _ScheduleEditorScreenState extends ConsumerState<ScheduleEditorScreen> {
                   ),
                 ),
               ),
-            _FieldLabel(
-              'Apps to lock',
-              trailing: '${_packages.length} selected',
+            const _FieldLabel('What to lock'),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(
+                  value: false,
+                  label: Text('Selected apps'),
+                  icon: Icon(Icons.apps_rounded),
+                ),
+                ButtonSegment(
+                  value: true,
+                  label: Text('Entire phone'),
+                  icon: Icon(Icons.phonelink_lock_rounded),
+                ),
+              ],
+              selected: {_lockPhone},
+              onSelectionChanged: (value) =>
+                  setState(() => _lockPhone = value.single),
             ),
-            appsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, __) => const AppEmptyState(
-                compact: true,
-                icon: Icons.error_outline_rounded,
-                title: 'Could not load apps',
+            if (_lockPhone)
+              Padding(
+                padding: const EdgeInsets.only(top: AppSpacing.sm),
+                child: Text(
+                  'After you unlock your phone, OpenLock asks for your PIN. '
+                  'Authentication lasts until the screen turns off. '
+                  'Phone calls and system controls remain available. '
+                  'This mode cannot fully block Home, Recents, or the notification shade.',
+                  style: AppTextStyles.caption.copyWith(
+                    color: SuiteColors.of(context).textSecondary,
+                  ),
+                ),
               ),
-              data: (apps) {
-                final sorted = [...apps]
-                  ..sort((a, b) => a.labelKey.compareTo(b.labelKey));
-                final allSelected = sorted.isNotEmpty &&
-                    sorted.every((app) => _packages.contains(app.packageName));
-                void toggleAll() => setState(() {
-                      if (allSelected) {
-                        _packages.clear();
-                      } else {
-                        _packages.addAll(sorted.map((app) => app.packageName));
-                      }
-                    });
-                void toggle(String pkg) => setState(() {
-                      if (!_packages.add(pkg)) _packages.remove(pkg);
-                    });
-                final colors = SuiteColors.of(context);
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (sorted.isNotEmpty) ...[
-                      FilledButton.icon(
-                        onPressed: toggleAll,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: colors.accentContainer,
-                          foregroundColor: colors.accent,
-                        ),
-                        icon: Icon(allSelected
-                            ? Icons.deselect_rounded
-                            : Icons.select_all_rounded),
-                        label: Text(allSelected ? 'Deselect all' : 'Select all'),
-                      ),
-                      const SizedBox(height: AppSpacing.sm),
-                    ],
-                    RowGroup(
-                      separatorIndent: AppSpacing.md,
-                      children: [
-                        for (final app in sorted)
-                          AppListRow(
-                            dense: true,
-                            title: app.label,
-                            onTap: () => toggle(app.packageName),
-                            trailing: Checkbox(
-                              value: _packages.contains(app.packageName),
-                              onChanged: (_) => toggle(app.packageName),
-                            ),
+            if (!_lockPhone) ...[
+              _FieldLabel(
+                'Apps to lock',
+                trailing: '${_packages.length} selected',
+              ),
+              appsAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (_, __) => const AppEmptyState(
+                  compact: true,
+                  icon: Icons.error_outline_rounded,
+                  title: 'Could not load apps',
+                ),
+                data: (apps) {
+                  final sorted = [...apps]
+                    ..sort((a, b) => a.labelKey.compareTo(b.labelKey));
+                  final allSelected = sorted.isNotEmpty &&
+                      sorted.every((app) => _packages.contains(app.packageName));
+                  void toggleAll() => setState(() {
+                        if (allSelected) {
+                          _packages.clear();
+                        } else {
+                          _packages.addAll(sorted.map((app) => app.packageName));
+                        }
+                      });
+                  void toggle(String pkg) => setState(() {
+                        if (!_packages.add(pkg)) _packages.remove(pkg);
+                      });
+                  final colors = SuiteColors.of(context);
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (sorted.isNotEmpty) ...[
+                        FilledButton.icon(
+                          onPressed: toggleAll,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: colors.accentContainer,
+                            foregroundColor: colors.accent,
                           ),
+                          icon: Icon(allSelected
+                              ? Icons.deselect_rounded
+                              : Icons.select_all_rounded),
+                          label: Text(allSelected ? 'Deselect all' : 'Select all'),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
                       ],
-                    ),
-                  ],
-                );
-              },
-            ),
+                      RowGroup(
+                        separatorIndent: AppSpacing.md,
+                        children: [
+                          for (final app in sorted)
+                            AppListRow(
+                              dense: true,
+                              title: app.label,
+                              onTap: () => toggle(app.packageName),
+                              trailing: Checkbox(
+                                value: _packages.contains(app.packageName),
+                                onChanged: (_) => toggle(app.packageName),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
           ],
         ),
       ),

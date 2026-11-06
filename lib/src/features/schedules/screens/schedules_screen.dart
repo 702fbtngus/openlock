@@ -41,8 +41,8 @@ class SchedulesScreen extends ConsumerWidget {
               const AppEmptyState(
                 icon: Icons.schedule_rounded,
                 title: 'No schedules yet',
-                message: 'Lock chosen apps during set hours, like social apps '
-                    '9-5 on weekdays.',
+                message: 'Lock selected apps or require a phone-wide PIN '
+                    'during set hours.',
               )
             else
               RowGroup(
@@ -80,12 +80,14 @@ class _ScheduleCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final count = schedule.packages.length;
+    final target = schedule.lockPhone
+        ? 'Entire phone'
+        : '$count ${count == 1 ? 'app' : 'apps'}';
     return DetailRow(
       onTap: onTap,
       leading: const IconBadge(icon: Icons.schedule_rounded),
       title: schedule.name,
-      detail: '${ScheduleFormat.summary(schedule)}\n'
-          '$count ${count == 1 ? 'app' : 'apps'}',
+      detail: '${ScheduleFormat.summary(schedule)}\n$target',
       trailing: Switch(value: schedule.enabled, onChanged: onToggle),
     );
   }

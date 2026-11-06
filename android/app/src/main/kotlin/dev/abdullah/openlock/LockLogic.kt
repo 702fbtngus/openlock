@@ -15,13 +15,29 @@ object LockLogic {
         val locked = HashSet<String>()
         for (i in 0 until schedules.length()) {
             val s = schedules.optJSONObject(i) ?: continue
-            if (!s.optBoolean("enabled", true)) continue
+            if (!s.optBoolean("enabled", true) || s.optBoolean("lockPhone", false)) continue
             if (isScheduleActive(s, now)) {
                 val pkgs = s.optJSONArray("packages") ?: continue
                 for (j in 0 until pkgs.length()) locked.add(pkgs.optString(j))
             }
         }
         return locked
+    }
+
+    /** Include occurrence/date and config so an old phone unlock cannot carry
+     *  into tomorrow's window or a newly edited/overlapping phone schedule. */
+    fun activePhoneScheduleKeys(schedules: JSONArray, now: Calendar): Set<String> = buildSet {
+        for (i in 0 until schedules.length()) {
+            val s = schedules.optJSONObject(i) ?: continue
+            if (!s.optBoolean("enabled", true) || !s.optBoolean("lockPhone", false) ||
+                !isScheduleActive(s, now)) continue
+            val start = s.optInt("startMinutes", 0)
+            val end = s.optInt("endMinutes", 0)
+            val minutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+            val occurrence = now.clone() as Calendar
+            if (end < start && minutes < end) occurrence.add(Calendar.DATE, -1)
+            add("${s}:${occurrence.get(Calendar.YEAR)}:${occurrence.get(Calendar.DAY_OF_YEAR)}")
+        }
     }
 
     private fun isScheduleActive(

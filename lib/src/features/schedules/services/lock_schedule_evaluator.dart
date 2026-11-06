@@ -15,13 +15,19 @@ abstract final class LockScheduleEvaluator {
   ) {
     final locked = <String>{};
     for (final schedule in schedules) {
-      if (!schedule.enabled) continue;
+      if (!schedule.enabled || schedule.lockPhone) continue;
       if (isActiveAt(schedule, now)) {
         locked.addAll(schedule.packages);
       }
     }
     return locked;
   }
+
+  static bool isPhoneLockedAt(
+    Iterable<LockSchedule> schedules,
+    DateTime now,
+  ) =>
+      schedules.any((s) => s.enabled && s.lockPhone && isActiveAt(s, now));
 
   /// Whether a single [schedule] is active at local time [now].
   static bool isActiveAt(LockSchedule schedule, DateTime now) {

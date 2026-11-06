@@ -1,5 +1,7 @@
 package dev.abdullah.openlock
 
+import android.app.KeyguardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -18,6 +20,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.text.TextUtils
 import android.util.TypedValue
@@ -38,8 +41,10 @@ import androidx.core.graphics.ColorUtils
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.fragment.app.FragmentActivity
 import java.security.SecureRandom
+import java.util.Calendar
 
 /**
  * The on-top lock screen shown over a locked app. Native (not Flutter) so it
@@ -52,6 +57,7 @@ class LockActivity : FragmentActivity() {
     private lateinit var store: ConfigStore
     private var lockedPackage: String = ""
     private var guardedSettings = false
+    private val isPhoneLock: Boolean get() = lockedPackage == PhoneLockSession.TARGET
     private var leavingWithoutUnlock = false
     private var pin = StringBuilder()
     private var failedAttempts = 0
@@ -78,24 +84,39 @@ class LockActivity : FragmentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var firstDrawObserver: ViewTreeObserver? = null
     private var firstDrawListener: ViewTreeObserver.OnDrawListener? = null
+    private val phoneScheduleWatch = object : Runnable {
+        override fun run() {
+            if (!isPhoneLock || isFinishing) return
+            if (!phoneLockRequired()) {
+                finish() // The schedule ended/was disabled; do not require PIN.
+                return
+            }
+            handler.postDelayed(this, 500L)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lockedPackage = intent.getStringExtra(EXTRA_PACKAGE).orEmpty()
+        guardedSettings = intent.getBooleanExtra(EXTRA_GUARDED_SETTINGS, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-        } else {
+            // Phone schedules must not replace keyguard or wake a sleeping phone.
+            setShowWhenLocked(!isPhoneLock)
+            setTurnScreenOn(!isPhoneLock)
+        } else if (!isPhoneLock) {
             @Suppress("DEPRECATION")
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                     WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
             )
+        } else {
+            @Suppress("DEPRECATION")
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
         }
 
         store = ConfigStore.get(this)
-        lockedPackage = intent.getStringExtra(EXTRA_PACKAGE).orEmpty()
-        guardedSettings = intent.getBooleanExtra(EXTRA_GUARDED_SETTINGS, false)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = cancelLock()
         })
@@ -107,7 +128,7 @@ class LockActivity : FragmentActivity() {
         palette = LockPalette.resolve(this)
         applyWindowColors()
 
-        if (store.fakeCoverEnabled()) {
+        if (store.fakeCoverEnabled() && !isPhoneLock) {
             setContentView(buildDecoyView())
         } else {
             showRealLock()
@@ -116,6 +137,18 @@ class LockActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (leavingWithoutUnlock) return
+        if (isPhoneLock) {
+            val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (keyguard.isKeyguardLocked || !power.isInteractive || !phoneLockRequired()) {
+                finish()
+                return
+            }
+            handler.removeCallbacks(phoneScheduleWatch)
+            handler.post(phoneScheduleWatch)
+            hidePhoneStatusBar()
+        }
         visiblePackage = lockedPackage
         GuardDiagnostics.launch("LockActivity resumed for $lockedPackage")
         GuardDiagnostics.lockResumed(lockedPackage)
@@ -138,12 +171,25 @@ class LockActivity : FragmentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        val previousTarget = lockedPackage
+        setIntent(intent)
         lockedPackage = intent.getStringExtra(EXTRA_PACKAGE) ?: lockedPackage
         guardedSettings = intent.getBooleanExtra(EXTRA_GUARDED_SETTINGS, false)
         leavingWithoutUnlock = false
+        if (previousTarget != lockedPackage) {
+            // singleInstance can reuse an app PIN for the phone target (or back).
+            // Rebuild its label, window flags and keypad; reject old callbacks.
+            leavingWithoutUnlock = true
+            recreate()
+        }
     }
 
     override fun onPause() {
+        handler.removeCallbacks(phoneScheduleWatch)
+        if (isPhoneLock && realLockShown) {
+            pin.clear()
+            updateDots()
+        }
         clearFirstDrawObserver()
         visiblePackage = null
         super.onPause()
@@ -178,6 +224,7 @@ class LockActivity : FragmentActivity() {
     }
 
     private fun cancelLock() {
+        if (isPhoneLock) return // Back is not authentication. Power still works.
         if (leavingWithoutUnlock) return
         leavingWithoutUnlock = true
         if (guardedSettings && lockedPackage == UninstallGuard.SETTINGS_PACKAGE &&
@@ -237,7 +284,8 @@ class LockActivity : FragmentActivity() {
             wrapWidth(top = 16),
         )
         column.addView(
-            text("Locked by OpenLock", SUBTITLE_SP, regular, p.textSecondary),
+            text(if (isPhoneLock) "PIN unlocks until screen off" else "Locked by OpenLock",
+                SUBTITLE_SP, regular, p.textSecondary),
             wrapWidth(top = 4),
         )
 
@@ -285,6 +333,20 @@ class LockActivity : FragmentActivity() {
                     gravity = Gravity.CENTER_HORIZONTAL
                     bottomMargin = dp(32)
                 },
+            )
+        }
+        if (isPhoneLock) {
+            root.addView(
+                text("Phone calls", 14f, medium, p.accent).apply {
+                    gravity = Gravity.CENTER
+                    minHeight = dp(48)
+                    setOnClickListener {
+                        runCatching { startActivity(PhoneLockCalls.dialIntent().apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }) }.onFailure { messageView.text = "Phone app unavailable" }
+                    }
+                },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)),
             )
         }
         root.addView(
@@ -440,7 +502,8 @@ class LockActivity : FragmentActivity() {
 
         val fixedDp = 24 + 24 + MARK_DP + 16 + 4 + 32 + DOT_DP + DOT_GAP_DP + ERROR_DP +
             ERROR_GAP_DP + ROW_GAP_DP * 3 + 20 +
-            (if (store.biometricEnabled()) FINGERPRINT_DP + 32 else 0)
+            (if (store.biometricEnabled()) FINGERPRINT_DP + 32 else 0) +
+            (if (isPhoneLock) 48 else 0)
         val textLines = sp((TITLE_SP + SUBTITLE_SP + ENDORSEMENT_SP) * LINE_HEIGHT)
         val key = ((availableHeightPx - dp(fixedDp) - textLines) / 4)
             .coerceIn(dp(KEY_MIN_DP), dp(KEY_MAX_DP))
@@ -455,7 +518,9 @@ class LockActivity : FragmentActivity() {
      * drawn from their layers so the device's own icon mask does not show.
      */
     private fun appIcon(pkg: String, sizePx: Int): Bitmap {
-        val icon = try {
+        val icon = if (pkg == PhoneLockSession.TARGET) {
+            ContextCompat.getDrawable(this, android.R.drawable.ic_lock_lock)!!
+        } else try {
             packageManager.getApplicationIcon(pkg)
         } catch (e: PackageManager.NameNotFoundException) {
             // The app was uninstalled while its lock was up.
@@ -605,7 +670,15 @@ class LockActivity : FragmentActivity() {
     private fun unlockAndFinish() {
         // Ignore a late biometric success after the user chose to cancel.
         if (leavingWithoutUnlock) return
-        LockSession.markUnlocked(lockedPackage)
+        if (isPhoneLock) {
+            val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (keyguard.isKeyguardLocked || !power.isInteractive) return
+            phoneLockRequired() // Recheck the current occurrence before granting.
+            PhoneLockSession.state.unlock()
+        } else {
+            LockSession.markUnlocked(lockedPackage)
+        }
         finish()
     }
 
@@ -648,6 +721,7 @@ class LockActivity : FragmentActivity() {
      * note and the PIN pad remains the fallback.
      */
     private fun triggerBiometric() {
+        if (isPhoneLock && !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return
         if (biometricInFlight) return
         if (!store.biometricEnabled()) return
 
@@ -660,6 +734,8 @@ class LockActivity : FragmentActivity() {
         }
 
         biometricInFlight = true
+        val target = lockedPackage
+        val phoneEpoch = PhoneLockSession.state.epoch
         val prompt = BiometricPrompt(
             this,
             ContextCompat.getMainExecutor(this),
@@ -668,7 +744,9 @@ class LockActivity : FragmentActivity() {
                     result: BiometricPrompt.AuthenticationResult,
                 ) {
                     biometricInFlight = false
-                    unlockAndFinish()
+                    if (lockedPackage == target && (!isPhoneLock || PhoneLockSession.state.epoch == phoneEpoch)) {
+                        unlockAndFinish()
+                    }
                 }
 
                 override fun onAuthenticationError(
@@ -698,6 +776,27 @@ class LockActivity : FragmentActivity() {
 
     // --- Helpers ------------------------------------------------------------
 
+    private fun phoneLockRequired(): Boolean {
+        val enabled = MonitorStartup.enabled(this) != false && store.pinHash() != null
+        PhoneLockSession.state.update(if (enabled) {
+            LockLogic.activePhoneScheduleKeys(store.schedules(), Calendar.getInstance())
+        } else emptySet())
+        return PhoneLockSession.state.requiresPin
+    }
+
+    private fun hidePhoneStatusBar() {
+        // Immersive presentation only: swiping can reveal system controls.
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.statusBars())
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && isPhoneLock && !leavingWithoutUnlock) hidePhoneStatusBar()
+    }
+
     private fun goHome() {
         leavingWithoutUnlock = true
         val home = Intent(Intent.ACTION_MAIN).apply {
@@ -709,6 +808,7 @@ class LockActivity : FragmentActivity() {
     }
 
     private fun appLabel(pkg: String): String {
+        if (pkg == PhoneLockSession.TARGET) return "Your phone"
         return try {
             val info = packageManager.getApplicationInfo(pkg, 0)
             packageManager.getApplicationLabel(info).toString()

@@ -92,4 +92,6 @@ dependencies {
     // JVM unit tests for the pure enforcement logic (notification redaction and
     // the uninstall-screen matcher). Run in CI via `gradlew testDebugUnitTest`.
     testImplementation("junit:junit:4.13.2")
+    // Real JSON parsing for schedule tests instead of Android's throwing stubs.
+    testImplementation("org.json:json:20240303")
 }

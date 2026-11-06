@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.KeyguardManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
@@ -30,6 +31,7 @@ class OpenLockMonitorService : Service() {
 
     private lateinit var store: ConfigStore
     private lateinit var usageStatsManager: UsageStatsManager
+    private lateinit var keyguardManager: KeyguardManager
     private val handler = Handler(Looper.getMainLooper())
     private val usageThread = HandlerThread("OpenLock-usage-poll").apply { start() }
     private val usageHandler = Handler(usageThread.looper)
@@ -41,6 +43,20 @@ class OpenLockMonitorService : Service() {
     private var lastForegroundPkg: String? = null
     private var lastLaunchedPkg: String? = null
     private var lastLaunchAt: Long = 0L
+    private var observedForeground: String? = null
+    private var callPackages = PhoneLockCalls.essentialPackages
+    private var lastPhoneLaunchAt = 0L
+    private val phonePoller = object : Runnable {
+        override fun run() {
+            if (!isRunning) return
+            // Independent of UsageStats/Binder latency and foreground events:
+            // a schedule must start even if an app has been open for hours.
+            runCatching { enforcePhoneLock() }.onFailure {
+                GuardDiagnostics.launch("Phone schedule check failed: ${it.javaClass.simpleName}")
+            }
+            handler.postDelayed(this, POLL_INTERVAL_MS)
+        }
+    }
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -48,8 +64,16 @@ class OpenLockMonitorService : Service() {
                 Intent.ACTION_SCREEN_OFF -> {
                     screenOffAt = System.currentTimeMillis()
                     screenInteractive = false
+                    PhoneLockSession.state.screenOff()
+                    lastPhoneLaunchAt = 0L
                 }
-                Intent.ACTION_SCREEN_ON -> screenInteractive = true
+                Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                    screenInteractive = true
+                    // The last event may still name the keyguard. Do not let
+                    // that stale SystemUI exemption suppress the wake-up PIN.
+                    if (observedForeground == "com.android.systemui") observedForeground = null
+                    enforcePhoneLock()
+                }
             }
         }
     }
@@ -57,6 +81,10 @@ class OpenLockMonitorService : Service() {
     private fun startPolling() {
         val ticket = pollSession.start()
         usageHandler.removeCallbacksAndMessages(null)
+        usageHandler.post {
+            val allowed = PhoneLockCalls.allowedPackages(this)
+            handler.post { callPackages = allowed }
+        }
         usageHandler.post(object : Runnable {
             override fun run() {
                 if (!pollSession.isCurrent(ticket)) return
@@ -73,7 +101,10 @@ class OpenLockMonitorService : Service() {
                     val accepted = pollSession.canApply(ticket, window, GuardedScreen.windowRevision)
                     try {
                         GuardDiagnostics.usagePoll(startedAt, finishedAt, accepted, error)
-                        if (accepted && current != null) tick(current)
+                        if (accepted && current != null) {
+                            observedForeground = current
+                            tick(current)
+                        }
                     } catch (_: Exception) {
                         // Keep the polling fallback alive after transient errors.
                     } finally {
@@ -92,15 +123,22 @@ class OpenLockMonitorService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
         store = ConfigStore.get(this)
         usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        PhoneLockSession.state.screenOff() // A monitor restart never preserves a phone unlock.
         screenInteractive = (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
         registerReceiver(screenReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
         })
+        GuardedScreen.onWindowChanged = { pkg ->
+            if (pkg != null) observedForeground = pkg
+            enforcePhoneLock()
+        }
         GuardedScreen.onDetected = { pkg ->
             // The accessibility event identifies the active OS window directly;
             // do not wait for UsageStats or the next 300 ms poll.
-            enforceGuardedScreen(pkg, System.currentTimeMillis())
+            if (!enforcePhoneLock(pkg)) enforceGuardedScreen(pkg, System.currentTimeMillis())
         }
         GuardedScreen.shouldWatchSettings = {
             val unlockedAt = LockSession.unlockedAt(UninstallGuard.SETTINGS_PACKAGE)
@@ -127,6 +165,8 @@ class OpenLockMonitorService : Service() {
         MonitorStartup.record(this, "monitor running")
         isRunning = true
         startPolling()
+        handler.removeCallbacks(phonePoller)
+        handler.post(phonePoller)
         return START_STICKY
     }
 
@@ -135,10 +175,12 @@ class OpenLockMonitorService : Service() {
         pollSession.stop()
         usageHandler.removeCallbacksAndMessages(null)
         usageThread.quitSafely()
+        handler.removeCallbacks(phonePoller)
         MonitorStartup.record(this, "monitor destroyed")
         GuardedScreen.onDetected = null
         GuardedScreen.onBackFinished = null
         GuardedScreen.shouldWatchSettings = null
+        GuardedScreen.onWindowChanged = null
         runCatching { unregisterReceiver(screenReceiver) }
         super.onDestroy()
     }
@@ -159,6 +201,8 @@ class OpenLockMonitorService : Service() {
         // clear OpenLock's redacted notice for it. (No-op when the listener is
         // off or nothing was hidden.)
         usageHandler.post { OpenLockNotificationListenerService.onAppForegrounded(current) }
+
+        if (enforcePhoneLock(current)) return
 
         // Never lock ourselves.
         if (current == packageName) return
@@ -188,6 +232,26 @@ class OpenLockMonitorService : Service() {
         lastLaunchedPkg = current
         lastLaunchAt = now
         launchLock(current)
+    }
+
+    private fun enforcePhoneLock(current: String? = observedForeground): Boolean {
+        val active = if (store.pinHash() != null) {
+            LockLogic.activePhoneScheduleKeys(store.schedules(), Calendar.getInstance())
+        } else emptySet()
+        PhoneLockSession.state.update(active)
+        if (!PhoneLockSession.state.requiresPin) {
+            lastPhoneLaunchAt = 0L
+            return false
+        }
+        // Phone-wide protection is deliberately best effort. Leave keyguard,
+        // system controls and telephone UIs available without new permissions.
+        if (!screenInteractive || (current != null && current in callPackages) || keyguardManager.isKeyguardLocked ||
+            LockActivity.visiblePackage != null || GuardedScreen.backNavigationPackage != null) return true
+        val now = SystemClock.elapsedRealtime()
+        if (lastPhoneLaunchAt != 0L && now - lastPhoneLaunchAt < PHONE_RELAUNCH_MS) return true
+        lastPhoneLaunchAt = now
+        launchLock(PhoneLockSession.TARGET)
+        return true
     }
 
     /** Shared by event-driven detection and the polling fallback. */
@@ -298,5 +362,6 @@ class OpenLockMonitorService : Service() {
         private const val POLL_INTERVAL_MS = 300L
         private const val LOOKBACK_MS = 10_000L
         private const val RELAUNCH_GUARD_MS = 1_500L
+        private const val PHONE_RELAUNCH_MS = 750L
     }
 }
