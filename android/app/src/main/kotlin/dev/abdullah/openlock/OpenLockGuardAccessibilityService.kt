@@ -32,16 +32,24 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     private var inspectionSequence = 0L
     private var inspectionPending = false
     private val recheck = Runnable { inspectWindow() }
-    private var watchingSettings = false
+    private val settingsWatchState by lazy {
+        SettingsWatchState(UninstallGuard.SETTINGS_PACKAGE, packageName)
+    }
+    private var settingsWatchScheduled = false
     private val settingsWatch = Runnable {
-        if (!destroyed && watchingSettings) {
+        settingsWatchScheduled = false
+        if (!destroyed && settingsWatchState.isActive(SystemClock.elapsedRealtime())) {
             if (GuardedScreen.needsSettingsWatch() && LockActivity.visiblePackage == null && backNavigation == null) {
                 // Window/click notifications can arrive >1 s late. Read the
                 // CURRENT root without borrowing a class/title/time from them.
                 inspectWindow(eventTiming = null, source = WATCH_SOURCE)
             } else {
+                GuardDiagnostics.watch("paused: policy=${GuardedScreen.needsSettingsWatch()} " +
+                    "lockVisible=${LockActivity.visiblePackage != null} back=${backNavigation != null}")
                 scheduleSettingsWatch()
             }
+        } else {
+            GuardDiagnostics.watch("stopped: ${settingsWatchState.reason} destroyed=$destroyed")
         }
     }
     private var backNavigation: GuardBackNavigation? = null
@@ -106,7 +114,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                 windowClass = event.className?.toString()
                 windowId = event.windowId
                 handler.removeCallbacks(recheck)
-                watchingSettings = windowPackage == UninstallGuard.SETTINGS_PACKAGE
+                settingsWatchState.observePackage(windowPackage, SystemClock.elapsedRealtime())
                 scheduleSettingsWatch()
                 if (windowPackage?.let(UninstallGuard::isCandidatePackage) == true) scheduleRechecks()
             }
@@ -154,8 +162,18 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     }
 
     private fun scheduleSettingsWatch() {
-        handler.removeCallbacks(settingsWatch)
-        if (!destroyed && watchingSettings) handler.postDelayed(settingsWatch, SETTINGS_WATCH_MS)
+        if (destroyed || !settingsWatchState.isActive(SystemClock.elapsedRealtime())) {
+            handler.removeCallbacks(settingsWatch)
+            settingsWatchScheduled = false
+            GuardDiagnostics.watch("stopped: ${settingsWatchState.reason} destroyed=$destroyed")
+        } else if (!settingsWatchScheduled) {
+            // Keep an existing deadline. Content events must not perpetually
+            // postpone an independent watch by another 150 ms.
+            settingsWatchScheduled = true
+            handler.postDelayed(settingsWatch, SETTINGS_WATCH_MS)
+            GuardDiagnostics.watch("scheduled: reason=${settingsWatchState.reason} " +
+                "dueAtElapsedMs=${SystemClock.elapsedRealtime() + SETTINGS_WATCH_MS}")
+        }
     }
 
     private fun inspectWindow(eventPaneTitle: String? = null, eventPackage: String? = null,
@@ -165,6 +183,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         if (source == WATCH_SOURCE && inspectionPending) {
             // A fallback must never evict a queued event read: that read may
             // carry a real class/pane title needed by an OEM's detail layout.
+            GuardDiagnostics.watch("waiting: inspectionPending request=$inspectionSequence")
             scheduleSettingsWatch()
             return
         }
@@ -179,12 +198,43 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         // dispatch, the monitor, PIN rendering, or queue many obsolete trees.
         scanHandler.removeCallbacksAndMessages(null)
         scanHandler.post {
-            val result = if (epoch == windowEpoch) readWindow(eventPaneTitle, eventPackage, eventWindowId,
-                expectedPackage, expectedClass, expectedId, epoch).copy(queuedAt = queuedAt,
-                    event = eventTiming) else null
+            val startedAt = SystemClock.elapsedRealtime()
+            val trace = GuardDiagnostics.readStarted(request, source, queuedAt)
+            val result = try {
+                if (epoch == windowEpoch) readWindow(eventPaneTitle, eventPackage, eventWindowId,
+                    expectedPackage, expectedClass, expectedId, epoch, trace).copy(queuedAt = queuedAt,
+                        event = eventTiming) else null
+            } catch (error: RuntimeException) {
+                // Also survive a node becoming invalid during cleanup.
+                Inspection(null, startedAt = startedAt, queuedAt = queuedAt,
+                    reason = "Read worker failed: ${error.javaClass.simpleName}")
+            }
+            val finishedAt = SystemClock.elapsedRealtime()
+            GuardDiagnostics.readStage(trace, "awaiting-main", result?.nodes?.size ?: 0)
             handler.post {
                 if (request == inspectionSequence) inspectionPending = false
-                if (!destroyed && epoch == windowEpoch && result != null) applyInspection(result, source)
+                val accepted = !destroyed && epoch == windowEpoch && result != null
+                val outcome = when {
+                    destroyed -> "destroyed"
+                    epoch != windowEpoch -> "epoch-changed"
+                    result == null -> "skipped-before-read"
+                    result.pkg == null -> "unavailable-or-failed"
+                    else -> "applied"
+                }
+                try {
+                    // Record even discarded reads: a slow query can outlive a
+                    // window transition and used to disappear from diagnostics.
+                    GuardDiagnostics.inspection(source, result?.pkg, result?.id ?: -1,
+                        result?.startedAt ?: startedAt, finishedAt,
+                        result?.guarded == true, rootReadMs = result?.rootReadMs,
+                        accepted = accepted, outcome = outcome, queuedAt = queuedAt)
+                    if (accepted && result != null) applyInspection(result, source)
+                } finally {
+                    GuardDiagnostics.readFinished(trace)
+                    // Completion, stale epoch and failed reads all rearm the
+                    // watch. Never depend solely on applyInspection succeeding.
+                    scheduleSettingsWatch()
+                }
             }
         }
     }
@@ -201,25 +251,34 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         val finishedAt: Long = SystemClock.elapsedRealtime(),
         val reason: String? = null,
         val event: GuardDiagnostics.EventTiming? = null,
+        val rootReadMs: Long? = null,
     )
 
     @Suppress("DEPRECATION")
     private fun readWindow(
         eventPaneTitle: String?, eventPackage: String?, eventWindowId: Int,
         expectedPackage: String?, expectedClass: String?, expectedId: Int, epoch: Long,
+        trace: GuardDiagnostics.ReadToken?,
     ): Inspection {
         val scanStartedAt = SystemClock.elapsedRealtime()
+        GuardDiagnostics.readStage(trace, "root")
         val root = try { rootInActiveWindow } catch (error: RuntimeException) {
-            return Inspection(null, startedAt = scanStartedAt, reason = "Root read failed: ${error.javaClass.simpleName}")
+            return Inspection(null, startedAt = scanStartedAt,
+                rootReadMs = SystemClock.elapsedRealtime() - scanStartedAt,
+                reason = "Root read failed: ${error.javaClass.simpleName}")
         }
+        val rootReadMs = SystemClock.elapsedRealtime() - scanStartedAt
         if (root == null) {
-            return Inspection(null, startedAt = scanStartedAt, reason = "Active window root is unavailable.")
+            return Inspection(null, startedAt = scanStartedAt, rootReadMs = rootReadMs,
+                reason = "Active window root is unavailable.")
         }
         try {
+            GuardDiagnostics.readStage(trace, "metadata")
             val rootPkg = root.packageName?.toString()
             if (rootPkg == null || !UninstallGuard.isCandidatePackage(rootPkg)) {
                 // Unknown OEM packages are identified without reading their text.
                 return Inspection(rootPkg, expectedClass, contentReady = true, startedAt = scanStartedAt,
+                    rootReadMs = rootReadMs,
                     reason = "Ignored package=$rootPkg class=$expectedClass (not a candidate)")
             }
             val cls = expectedClass.takeIf { expectedPackage == rootPkg && expectedId == root.windowId }
@@ -240,7 +299,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
             // class or confirmed pane title can prove a match without a walk.
             var guarded = UninstallGuard.isSpecialAccessScreenClass(rootPkg, cls) ||
                 (initialNodes.isNotEmpty() && matches(initialNodes))
-            val nodes = if (guarded) initialNodes else flatten(root, initialNodes) { partial ->
+            val nodes = if (guarded) initialNodes else flatten(root, initialNodes, trace) { partial ->
                 if (epoch != windowEpoch) return@flatten true
                 // All positive rules require only accumulated evidence; extra
                 // descendants cannot invalidate a match. Negative results still
@@ -248,16 +307,19 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                 guarded = matches(partial)
                 guarded
             }
+            GuardDiagnostics.readStage(trace, "match", nodes.size)
             if (!guarded) guarded = matches(nodes)
             val matchedAt = SystemClock.elapsedRealtime()
             return Inspection(rootPkg, cls, root.windowId, nodes, guarded, nodes.isNotEmpty(),
-                startedAt = scanStartedAt, finishedAt = matchedAt)
+                startedAt = scanStartedAt, finishedAt = matchedAt, rootReadMs = rootReadMs)
         } catch (error: RuntimeException) {
             // A transitioning Settings tree can become invalid while walking it.
             // Keep the service alive and let the content event/rechecks retry.
             return Inspection(null, startedAt = scanStartedAt,
+                rootReadMs = rootReadMs,
                 reason = "Window read failed: ${error.javaClass.simpleName}: ${error.message}")
         } finally {
+            GuardDiagnostics.readStage(trace, "cleanup")
             root.recycle()
         }
     }
@@ -268,8 +330,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         val timing = if (pkg != null) GuardDiagnostics.scan(pkg, result.startedAt, result.finishedAt,
             result.guarded, result.queuedAt,
             event = result.event?.takeIf { it.pkg == pkg && it.windowId == result.id }, source = source) else null
-        GuardDiagnostics.inspection(source, pkg, result.id, result.startedAt, result.finishedAt, result.guarded)
-        if (pkg != null) watchingSettings = pkg == UninstallGuard.SETTINGS_PACKAGE
+        settingsWatchState.observePackage(pkg, SystemClock.elapsedRealtime())
         advanceBackNavigation(pkg, result.guarded, result.contentReady)
         if (result.guarded && pkg != null) GuardedScreen.set(pkg, timing) else GuardedScreen.clear()
         if (result.reason != null) {
@@ -279,9 +340,6 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                 result.finishedAt - result.startedAt)
         }
         if (pkg != null) logDiagnostics(pkg, result.cls, result.nodes, result.guarded)
-        // Schedule AFTER delivery, never at fixed rate: one serial worker and
-        // no pile-up of watchdog reads when Settings/Binder responds slowly.
-        scheduleSettingsWatch()
     }
 
     override fun onInterrupt() {
@@ -293,8 +351,10 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         if (backNavigation != null) performGlobalAction(GLOBAL_ACTION_HOME)
         finishBackNavigation()
         handler.removeCallbacks(recheck)
-        watchingSettings = false
+        settingsWatchState.stop("interrupt")
         handler.removeCallbacks(settingsWatch)
+        settingsWatchScheduled = false
+        GuardDiagnostics.watch("stopped: interrupt")
         GuardedScreen.clear()
     }
 
@@ -310,8 +370,10 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         if (backNavigation != null) performGlobalAction(GLOBAL_ACTION_HOME)
         finishBackNavigation()
         handler.removeCallbacks(recheck)
-        watchingSettings = false
+        settingsWatchState.stop("destroy")
         handler.removeCallbacks(settingsWatch)
+        settingsWatchScheduled = false
+        GuardDiagnostics.watch("stopped: destroy")
         GuardedScreen.clear()
         super.onDestroy()
     }
@@ -406,6 +468,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     private fun flatten(
         root: AccessibilityNodeInfo,
         initialNodes: List<ScreenNode>,
+        trace: GuardDiagnostics.ReadToken?,
         shouldStop: (List<ScreenNode>) -> Boolean,
     ): List<ScreenNode> {
         val out = ArrayList(initialNodes)
@@ -456,6 +519,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                         }
                     }
                     for (i in node.childCount - 1 downTo 0) {
+                        if (trace != null) GuardDiagnostics.readStage(trace, "child[$i]", visited)
                         node.getChild(i)?.let { stack.addLast(PendingNode(it, inToolbar, clickable, inList)) }
                     }
                 } finally {
