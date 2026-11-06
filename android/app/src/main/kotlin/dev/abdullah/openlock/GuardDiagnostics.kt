@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Explicitly started, bounded, in-memory capture. No disk or network writes. */
 object GuardDiagnostics {
-    const val REVISION = "settings-guard-8-entry"
+    const val REVISION = "settings-guard-8-entry2"
     private const val CAPTURE_MS = 10 * 60 * 1_000L
     private const val MAX_SNAPSHOTS = 8
     @Volatile private var until = 0L

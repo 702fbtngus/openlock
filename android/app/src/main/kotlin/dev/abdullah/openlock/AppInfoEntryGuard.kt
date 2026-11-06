@@ -37,7 +37,8 @@ class AppInfoEntryGuard(private val ownLabel: String, private val ownPackage: St
         }
         return Entry.SETTINGS_APP_ROW.takeIf { pkg == UninstallGuard.SETTINGS_PACKAGE && windowId >= 0 &&
             appsWindowId == windowId && UninstallGuard.isSettingsEntryClickSource(source, windowClass) &&
-            namesOwnApp(source, texts) }
+            (UninstallGuard.isOwnAppRowClickText(source.text, ownLabel, ownPackage) ||
+                texts.any { UninstallGuard.isOwnAppRowClickText(it, ownLabel, ownPackage) }) }
     }
 
     fun clear() {

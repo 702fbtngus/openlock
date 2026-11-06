@@ -135,4 +135,33 @@ class AppInfoEntryGuardTest {
         assertNull(rowClick(guard))
         assertNull(info(guard))
     }
+
+    @Test fun samsungAppsListWithoutATitleStillSupportsTheOwnRowClick() {
+        val guard = state()
+        val capturedStructure = listOf(
+            ScreenNode("com.android.settings:id/apps_list", null,
+                className = "androidx.recyclerview.widget.RecyclerView", inList = true),
+            ScreenNode("android:id/title", "OpenLock", className = "android.widget.TextView",
+                clickable = true, inList = true),
+            ScreenNode("com.android.settings:id/action_bar", null, inToolbar = true),
+            ScreenNode(null, "상위 메뉴로 이동", className = "android.widget.ImageButton", clickable = true, inToolbar = true),
+        )
+        guard.observeScreen(settings, host, 12, capturedStructure)
+        assertEquals(AppInfoEntryGuard.Entry.SETTINGS_APP_ROW, rowClick(guard, text = "OpenLock,"))
+        assertEquals(AppInfoEntryGuard.Entry.SETTINGS_APP_ROW, rowClick(guard, text = "\u200eOpenLock,  \u200f"))
+        assertNull(rowClick(guard, text = "OpenLock, shortcut"))
+        assertNull(rowClick(guard, text = "OpenLock Pro,"))
+        assertFalse(UninstallGuard.isGuardedScreen(settings, host, capturedStructure,
+            "OpenLock", own, "System Service"))
+    }
+
+    @Test fun anAppsListIdWithoutTheActualListOrOwnRowIsNotEnough() {
+        val guard = state()
+        val marker = ScreenNode("com.android.settings:id/apps_list", null,
+            className = "androidx.recyclerview.widget.RecyclerView", inList = true)
+        guard.observeScreen(settings, host, 12, listOf(marker))
+        assertNull(rowClick(guard))
+        guard.observeScreen(settings, host, 12, listOf(marker.copy(className = "android.widget.TextView")) + apps().drop(1))
+        assertNull(rowClick(guard))
+    }
 }

@@ -335,20 +335,6 @@ class LockActivity : FragmentActivity() {
                 },
             )
         }
-        if (isPhoneLock) {
-            root.addView(
-                text("Phone calls", 14f, medium, p.accent).apply {
-                    gravity = Gravity.CENTER
-                    minHeight = dp(48)
-                    setOnClickListener {
-                        runCatching { startActivity(PhoneLockCalls.dialIntent().apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }) }.onFailure { messageView.text = "Phone app unavailable" }
-                    }
-                },
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)),
-            )
-        }
         root.addView(
             endorsement(),
             LinearLayout.LayoutParams(
@@ -502,8 +488,7 @@ class LockActivity : FragmentActivity() {
 
         val fixedDp = 24 + 24 + MARK_DP + 16 + 4 + 32 + DOT_DP + DOT_GAP_DP + ERROR_DP +
             ERROR_GAP_DP + ROW_GAP_DP * 3 + 20 +
-            (if (store.biometricEnabled()) FINGERPRINT_DP + 32 else 0) +
-            (if (isPhoneLock) 48 else 0)
+            (if (store.biometricEnabled()) FINGERPRINT_DP + 32 else 0)
         val textLines = sp((TITLE_SP + SUBTITLE_SP + ENDORSEMENT_SP) * LINE_HEIGHT)
         val key = ((availableHeightPx - dp(fixedDp) - textLines) / 4)
             .coerceIn(dp(KEY_MIN_DP), dp(KEY_MAX_DP))

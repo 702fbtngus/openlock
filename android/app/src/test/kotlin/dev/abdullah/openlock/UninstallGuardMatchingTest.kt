@@ -62,6 +62,14 @@ class UninstallGuardMatchingTest {
         assertTrue(about(settings, "com.android.settings.applications.InstalledAppDetailsTop", *samsungAppInfo("OpenLock")))
     }
 
+    @Test fun earlyHeaderChecksUseTheOriginalSingleAppIdentityRules() {
+        assertTrue(UninstallGuard.isOwnAppHeader(ScreenNode("com.android.settings:id/entity_header_title", "OpenLock"), label, pkg))
+        assertTrue(UninstallGuard.isOwnAppHeader(ScreenNode("com.android.settings:id/admin_name", pkg), label, pkg))
+        assertFalse(UninstallGuard.isOwnAppHeader(ScreenNode("android:id/title", "OpenLock"), label, pkg))
+        assertFalse(UninstallGuard.isOwnAppHeader(ScreenNode("com.android.settings:id/entity_header_title", "OpenLock Pro"), label, pkg))
+        assertFalse(UninstallGuard.isOwnAppHeader(ScreenNode("com.android.settings:id/entity_header_title", "OpenLock,"), label, pkg))
+    }
+
     @Test
     fun snapshotHeadersIdentifyOwnAppWithoutAWindowClass() {
         assertTrue(about(settings, null, *samsungAppInfo("OpenLock")))

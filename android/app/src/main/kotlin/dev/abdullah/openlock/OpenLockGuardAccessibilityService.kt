@@ -357,7 +357,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
             var guarded = UninstallGuard.isSpecialAccessScreenClass(rootPkg, cls) ||
                 UninstallGuard.isDeviceAdminScreenClass(rootPkg, cls) ||
                 (initialNodes.isNotEmpty() && matches(initialNodes))
-            val nodes = if (guarded) initialNodes else flatten(root, initialNodes, trace) { partial ->
+            val nodes = if (guarded) initialNodes else flatten(root, initialNodes, trace, epoch) { partial ->
                 if (epoch != windowEpoch) return@flatten true
                 // All positive rules require only accumulated evidence; extra
                 // descendants cannot invalidate a match. Negative results still
@@ -518,11 +518,11 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         if (target != null) GuardedScreen.onBackFinished?.invoke(target)
     }
 
-    private data class PendingNode(
+    private class PendingNode(
         val node: AccessibilityNodeInfo,
-        val inToolbar: Boolean,
-        val clickableParent: Boolean,
-        val inList: Boolean,
+        var inToolbar: Boolean,
+        var clickableParent: Boolean,
+        var inList: Boolean,
     )
 
     @Suppress("DEPRECATION")
@@ -530,25 +530,28 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         root: AccessibilityNodeInfo,
         initialNodes: List<ScreenNode>,
         trace: GuardDiagnostics.ReadToken?,
+        epoch: Long,
         shouldStop: (List<ScreenNode>) -> Boolean,
     ): List<ScreenNode> {
         val out = ArrayList(initialNodes)
-        val stack = ArrayDeque<PendingNode>()
-        stack.addLast(PendingNode(root, false, false, false))
-        var visited = 0
         var nextMatchCheck = MATCH_CHECK_INTERVAL
-        try {
-            while (stack.isNotEmpty() && visited++ < MAX_NODES) {
-                val (node, parentToolbar, clickableParent, parentList) = stack.removeLast()
-                try {
+        walkGuardTree(
+            root = PendingNode(root, false, false, false),
+            limit = MAX_NODES,
+            visit = { pending, visited ->
+                if (epoch != windowEpoch) true else {
+                    val node = pending.node
                     val id = node.viewIdResourceName
                     val cls = node.className?.toString()
-                    val inToolbar = parentToolbar || id?.substringAfter(":id/") in TOOLBAR_IDS ||
+                    val inToolbar = pending.inToolbar || id?.substringAfter(":id/") in TOOLBAR_IDS ||
                         cls?.endsWith("Toolbar") == true
-                    val inList = parentList || node.collectionInfo != null ||
+                    val inList = pending.inList || node.collectionInfo != null ||
                         cls?.endsWith("RecyclerView") == true || cls?.endsWith("ListView") == true
-                    val clickable = node.isClickable || clickableParent ||
+                    val clickable = node.isClickable || pending.clickableParent ||
                         node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK }
+                    pending.inToolbar = inToolbar
+                    pending.inList = inList
+                    pending.clickableParent = clickable
                     val pane = if (Build.VERSION.SDK_INT >= 28 && (node.isVisibleToUser || node === root)) {
                         node.paneTitle?.toString()
                     } else null
@@ -569,27 +572,29 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                     // Check early headers frequently, then widen the interval
                     // (32/64/128/...) so negative screens are not rescanned 75
                     // times. The caller always checks the final accumulated tree.
-                    val serviceTitle = out.subList((out.size - 3).coerceAtLeast(0), out.size).any {
-                        UninstallGuard.isOwnServiceTitle(it, serviceLabel)
+                    val identity = out.subList((out.size - 3).coerceAtLeast(0), out.size).any {
+                        UninstallGuard.isOwnServiceTitle(it, serviceLabel) ||
+                            UninstallGuard.isOwnAppHeader(it, ownLabel, packageName)
                     }
-                    if (serviceTitle || visited == 1 || visited >= nextMatchCheck) {
-                        if (shouldStop(out)) return out
+                    if (identity || visited == 1 || visited >= nextMatchCheck) {
+                        val matched = shouldStop(out)
                         if (visited >= nextMatchCheck) {
                             nextMatchCheck = if (nextMatchCheck < 32) nextMatchCheck + MATCH_CHECK_INTERVAL
                                 else nextMatchCheck * 2
                         }
-                    }
-                    for (i in node.childCount - 1 downTo 0) {
-                        if (trace != null) GuardDiagnostics.readStage(trace, "child[$i]", visited)
-                        node.getChild(i)?.let { stack.addLast(PendingNode(it, inToolbar, clickable, inList)) }
-                    }
-                } finally {
-                    if (node !== root) node.recycle()
+                        matched
+                    } else false
                 }
-            }
-        } finally {
-            for (pending in stack) if (pending.node !== root) pending.node.recycle()
-        }
+            },
+            childCount = { it.node.childCount },
+            childAt = { parent, index, visited ->
+                if (trace != null) GuardDiagnostics.readStage(trace, "child[$index]", visited)
+                parent.node.getChild(index)?.let {
+                    PendingNode(it, parent.inToolbar, parent.clickableParent, parent.inList)
+                }
+            },
+            release = { if (it.node !== root) it.node.recycle() },
+        )
         return out
     }
 

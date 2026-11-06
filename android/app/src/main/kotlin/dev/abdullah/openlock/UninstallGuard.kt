@@ -196,7 +196,11 @@ object UninstallGuard {
     fun isOwnAppInAppsList(windowPackage: String, windowClass: String?, nodes: List<ScreenNode>,
                          ownLabel: String, ownPackage: String): Boolean {
         if (windowPackage != SETTINGS_PACKAGE || windowClass?.contains("search", ignoreCase = true) == true) return false
-        val appsPage = screenName(windowClass) == "manageapplications" || nodes.any { node ->
+        // Observed Samsung apps page has no title text in its toolbar. This
+        // exact Settings RecyclerView ID still identifies the list structure.
+        val samsungAppsList = nodes.any { it.viewId == "$SETTINGS_PACKAGE:id/apps_list" &&
+            it.className?.endsWith("RecyclerView") == true && it.inList }
+        val appsPage = samsungAppsList || screenName(windowClass) == "manageapplications" || nodes.any { node ->
             isExplicitPageTitle(node) && APPS_LIST_TITLES.any { title ->
                 sameText(node.text.orEmpty(), title) || sameText(node.paneTitle.orEmpty(), title)
             }
@@ -209,6 +213,16 @@ object UninstallGuard {
 
     fun isOwnAppName(text: String?, ownLabel: String, ownPackage: String): Boolean =
         text != null && (sameText(text, ownLabel) || sameText(text, ownPackage))
+
+    /** One UI's row accessibility label can end with a separator: "OpenLock,".
+     *  Accept only that trailing comma, never a longer app name or summary. */
+    fun isOwnAppRowClickText(text: String?, ownLabel: String, ownPackage: String): Boolean =
+        isOwnAppName(text, ownLabel, ownPackage) || (text != null &&
+            isOwnAppName(normalizeText(text).removeSuffix(",").trimEnd(), ownLabel, ownPackage))
+
+    fun isOwnAppHeader(node: ScreenNode, ownLabel: String, ownPackage: String): Boolean =
+        node.viewId?.let { id -> HEADER_ID_SUFFIXES.any { id.endsWith(it) } } == true &&
+            node.text != null && (sameText(node.text, ownLabel) || node.text.trim() == ownPackage)
 
     fun isAppInfoAction(text: String?): Boolean = matchesNormalizedText(text, normalizedAppInfoActions)
 
@@ -288,12 +302,7 @@ object UninstallGuard {
         }
         if (windowPackage != SETTINGS_PACKAGE) return false
 
-        val headerNamesUs = nodes.any { node ->
-            val id = node.viewId ?: return@any false
-            HEADER_ID_SUFFIXES.any { id.endsWith(it) } &&
-                node.text != null &&
-                (sameText(node.text, ownLabel) || node.text.trim() == ownPackage)
-        }
+        val headerNamesUs = nodes.any { isOwnAppHeader(it, ownLabel, ownPackage) }
         if (headerNamesUs) return true
 
         // DeviceAdminAdd is a single-app screen; its body text names the admin
