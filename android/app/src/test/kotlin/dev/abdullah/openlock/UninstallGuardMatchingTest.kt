@@ -63,6 +63,25 @@ class UninstallGuardMatchingTest {
     }
 
     @Test
+    fun snapshotHeadersIdentifyOwnAppWithoutAWindowClass() {
+        assertTrue(about(settings, null, *samsungAppInfo("OpenLock")))
+        assertFalse(about(settings, null, *samsungAppInfo("Chrome")))
+        assertTrue(about(settings, null,
+            "com.android.settings:id/admin_name" to "OpenLock",
+            "com.android.settings:id/action_button" to "Deactivate this device admin app"))
+        assertFalse(about(settings, null,
+            "com.android.settings:id/admin_name" to "Find My Device",
+            "com.android.settings:id/action_button" to "Deactivate this device admin app"))
+
+        // A body-only OEM layout needs its real DeviceAdminAdd class from an
+        // event. An independent snapshot cannot borrow an old screen's class.
+        assertFalse(about(settings, null,
+            null to "Device admin app",
+            "com.android.settings:id/sec_admin_title" to "OpenLock",
+            null to "Deactivate"))
+    }
+
+    @Test
     fun doesNotGuardOtherAppsInfo() {
         assertFalse(about(settings, subSettings, *pixelAppInfo("Chrome")))
         assertFalse(about(settings, "com.android.settings.applications.InstalledAppDetailsTop", *samsungAppInfo("WhatsApp")))

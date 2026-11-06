@@ -29,7 +29,21 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     private val scanHandler = Handler(scanThread.looper)
     @Volatile private var windowEpoch = 0L
     private var destroyed = false
+    private var inspectionSequence = 0L
+    private var inspectionPending = false
     private val recheck = Runnable { inspectWindow() }
+    private var watchingSettings = false
+    private val settingsWatch = Runnable {
+        if (!destroyed && watchingSettings) {
+            if (GuardedScreen.needsSettingsWatch() && LockActivity.visiblePackage == null && backNavigation == null) {
+                // Window/click notifications can arrive >1 s late. Read the
+                // CURRENT root without borrowing a class/title/time from them.
+                inspectWindow(eventTiming = null, source = WATCH_SOURCE)
+            } else {
+                scheduleSettingsWatch()
+            }
+        }
+    }
     private var backNavigation: GuardBackNavigation? = null
     private var backTarget: String? = null
     private var navigationCover: View? = null
@@ -58,6 +72,15 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        // Framework cache handling runs BEFORE onAccessibilityEvent, and can
+        // synchronously refresh a clicked node. It can also retain descendants
+        // of a same-window fragment until its delayed content event arrives.
+        // Fresh worker reads avoid both dependencies (API 33+ public API).
+        val cacheMode = if (Build.VERSION.SDK_INT >= 33) {
+            runCatching { if (setCacheEnabled(false)) "disabled (prefetch disabled)" else "disable refused" }
+                .getOrElse { "disable failed: ${it.javaClass.simpleName}" }
+        } else "platform default (API <33)"
+        GuardDiagnostics.accessibilityMode("nodeCache=$cacheMode settingsWatchIntervalMs=$SETTINGS_WATCH_MS")
         MonitorStartup.restoreAsync(this, "accessibility_connected")
         GuardedScreen.onBackRequested = ::startBackNavigation
         inspectWindow()
@@ -83,6 +106,8 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                 windowClass = event.className?.toString()
                 windowId = event.windowId
                 handler.removeCallbacks(recheck)
+                watchingSettings = windowPackage == UninstallGuard.SETTINGS_PACKAGE
+                scheduleSettingsWatch()
                 if (windowPackage?.let(UninstallGuard::isCandidatePackage) == true) scheduleRechecks()
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
@@ -128,24 +153,38 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         for (delay in longArrayOf(75L, 200L, 500L)) handler.postDelayed(recheck, delay)
     }
 
+    private fun scheduleSettingsWatch() {
+        handler.removeCallbacks(settingsWatch)
+        if (!destroyed && watchingSettings) handler.postDelayed(settingsWatch, SETTINGS_WATCH_MS)
+    }
+
     private fun inspectWindow(eventPaneTitle: String? = null, eventPackage: String? = null,
-                              eventWindowId: Int = -1, eventTiming: GuardDiagnostics.EventTiming? = windowEventTiming) {
+                              eventWindowId: Int = -1, eventTiming: GuardDiagnostics.EventTiming? = windowEventTiming,
+                              source: String = "window-scan") {
         if (destroyed) return
+        if (source == WATCH_SOURCE && inspectionPending) {
+            // A fallback must never evict a queued event read: that read may
+            // carry a real class/pane title needed by an OEM's detail layout.
+            scheduleSettingsWatch()
+            return
+        }
+        val request = ++inspectionSequence
+        inspectionPending = true
         val epoch = windowEpoch
         val queuedAt = SystemClock.elapsedRealtime()
         val expectedPackage = windowPackage
-        val expectedClass = windowClass
+        val expectedClass = windowClass.takeUnless { source == WATCH_SOURCE }
         val expectedId = windowId
         // Coalesce pending reads. A slow Binder call must not block event
         // dispatch, the monitor, PIN rendering, or queue many obsolete trees.
         scanHandler.removeCallbacksAndMessages(null)
-        scanHandler.post scan@{
-            if (epoch != windowEpoch) return@scan
-            val result = readWindow(eventPaneTitle, eventPackage, eventWindowId,
+        scanHandler.post {
+            val result = if (epoch == windowEpoch) readWindow(eventPaneTitle, eventPackage, eventWindowId,
                 expectedPackage, expectedClass, expectedId, epoch).copy(queuedAt = queuedAt,
-                    event = eventTiming)
+                    event = eventTiming) else null
             handler.post {
-                if (!destroyed && epoch == windowEpoch) applyInspection(result)
+                if (request == inspectionSequence) inspectionPending = false
+                if (!destroyed && epoch == windowEpoch && result != null) applyInspection(result, source)
             }
         }
     }
@@ -224,11 +263,13 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     }
 
     /** Only immutable scan data crosses threads; all UI/session state stays here. */
-    private fun applyInspection(result: Inspection) {
+    private fun applyInspection(result: Inspection, source: String) {
         val pkg = result.pkg
         val timing = if (pkg != null) GuardDiagnostics.scan(pkg, result.startedAt, result.finishedAt,
             result.guarded, result.queuedAt,
-            event = result.event?.takeIf { it.pkg == pkg && it.windowId == result.id }) else null
+            event = result.event?.takeIf { it.pkg == pkg && it.windowId == result.id }, source = source) else null
+        GuardDiagnostics.inspection(source, pkg, result.id, result.startedAt, result.finishedAt, result.guarded)
+        if (pkg != null) watchingSettings = pkg == UninstallGuard.SETTINGS_PACKAGE
         advanceBackNavigation(pkg, result.guarded, result.contentReady)
         if (result.guarded && pkg != null) GuardedScreen.set(pkg, timing) else GuardedScreen.clear()
         if (result.reason != null) {
@@ -238,15 +279,22 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                 result.finishedAt - result.startedAt)
         }
         if (pkg != null) logDiagnostics(pkg, result.cls, result.nodes, result.guarded)
+        // Schedule AFTER delivery, never at fixed rate: one serial worker and
+        // no pile-up of watchdog reads when Settings/Binder responds slowly.
+        scheduleSettingsWatch()
     }
 
     override fun onInterrupt() {
         GuardedScreen.windowChanged()
         windowEpoch++
+        inspectionSequence++
+        inspectionPending = false
         scanHandler.removeCallbacksAndMessages(null)
         if (backNavigation != null) performGlobalAction(GLOBAL_ACTION_HOME)
         finishBackNavigation()
         handler.removeCallbacks(recheck)
+        watchingSettings = false
+        handler.removeCallbacks(settingsWatch)
         GuardedScreen.clear()
     }
 
@@ -254,12 +302,16 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         GuardedScreen.windowChanged()
         destroyed = true
         windowEpoch++
+        inspectionSequence++
+        inspectionPending = false
         scanHandler.removeCallbacksAndMessages(null)
         scanThread.quitSafely()
         GuardedScreen.onBackRequested = null
         if (backNavigation != null) performGlobalAction(GLOBAL_ACTION_HOME)
         finishBackNavigation()
         handler.removeCallbacks(recheck)
+        watchingSettings = false
+        handler.removeCallbacks(settingsWatch)
         GuardedScreen.clear()
         super.onDestroy()
     }
@@ -459,6 +511,8 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         const val TAG = "OpenLockGuard"
         const val MAX_NODES = 600
         const val MATCH_CHECK_INTERVAL = 8
+        const val SETTINGS_WATCH_MS = 150L
+        const val WATCH_SOURCE = "window-watchdog"
         // Container rows only: a TextView may be a search/input field on OEM
         // builds. Unrecognised sources use the normal detail-title fallback.
         val ENTRY_CLICK_CLASSES = setOf("android.widget.LinearLayout", "android.widget.RelativeLayout",
@@ -490,11 +544,14 @@ object GuardedScreen {
     var onDetected: ((String) -> Unit)? = null
     var onBackRequested: ((String) -> Boolean)? = null
     var onBackFinished: ((String) -> Unit)? = null
+    var shouldWatchSettings: (() -> Boolean)? = null
     var backNavigationPackage: String? = null
 
     fun requestBack(windowPackage: String): Boolean = onBackRequested?.invoke(windowPackage) == true
 
     fun isNavigatingBack(windowPackage: String): Boolean = backNavigationPackage == windowPackage
+
+    fun needsSettingsWatch(): Boolean = shouldWatchSettings?.invoke() == true
 
     fun set(windowPackage: String, detection: GuardDiagnostics.DetectionTiming? = null) {
         pkg = windowPackage

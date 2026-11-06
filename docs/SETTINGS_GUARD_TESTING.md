@@ -1,5 +1,58 @@
 # 설정 화면 보호 변경 및 기기 테스트
 
+## 이벤트 전달 지연: 일곱 번째 수정
+
+`settings-guard-6 commit=5a2a7ec38b11` 삼성 보고서에서 느린 두 번째 진입은
+`source=service-entry-click eventDeliveryMs=1539 eventToRequestMs=1`,
+`requestToResumeMs=22 requestToFirstDrawMs=36`이었다. 뒤따른 창/콘텐츠 이벤트도
+1,219~1,488ms 늦게 묶여 도착했다. 콜백 이후 PIN 실행보다 **콜백 이전**이 병목이다.
+같은 보고서의 첫 번째 진입은 `eventDeliveryMs=7`이었다.
+
+수정 내용:
+
+- 기존 창/콘텐츠/클릭 이벤트 처리를 유지하고, Settings에서 보호가 필요한 동안
+  **검사 결과 적용 후 150ms** 뒤 현재 활성 창을 다시 읽는다. 기존 재검사는 진입 후
+  500ms에 끝났으므로, 나중에 발생한 클릭 통지가 늦으면 독립적으로 감지할 길이 없었다.
+  150ms는 검사 간 대기 시간이며 PIN 표시 시간의 상한이 아니다.
+- 별도 작업 스레드를 늘리지 않고 기존 직렬 검사 스레드에서 실행한다. 느린 읽기가
+  끝나기 전에 주기적 검사를 계속 쌓지 않는다. 실제 root의 패키지/창을 사용하며,
+  늦게 도착한 이벤트의 class, pane 제목, 시간 정보를 주기 검사에 붙이지 않는다.
+- 목록의 System Service 행만으로 잠그지 않는다. 기존 `UninstallGuard`의 상세 화면,
+  특별한 접근, 자신의 앱 정보/기기 관리자/삭제 확인 판별 규칙을 그대로 사용한다.
+  새 터치 차단 창이나 PiP는 추가하지 않는다.
+- 화면이 꺼져 있거나, PIN이 표시 중이거나, 인증으로 Settings 세션이 풀렸거나,
+  뒤로가기 처리 중이면 주기 검사를 생략한다. Settings 밖으로 나간 것이 확인되면
+  주기 검사를 중단한다. 기존 300ms 사용 기록 폴링과 잠금 세션 정책은 유지한다.
+- API 33 이상에서 공개 API `setCacheEnabled(false)`를 적용한다. Android는 앱 콜백 전에
+  접근성 캐시를 처리하며, 클릭된 캐시 노드를 동기 갱신할 수 있다. 이 경로의 대기를
+  피하고 지연된 콘텐츠 이벤트 전에도 새 노드를 읽기 위한 변경이다. **보고서만으로
+  캐시 갱신이 원인이라고 확정하지 않는다.** 캐시를 끄면 prefetch도 꺼지므로 실기기에서
+  검사 비용을 확인해야 한다. API 32 이하는 기존 플랫폼 캐시를 유지한다.
+
+참고: [캐시 API](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService#setCacheEnabled(boolean)),
+[콜백 전 처리 순서](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/accessibilityservice/AccessibilityService.java),
+[클릭 노드 갱신](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/view/accessibility/AccessibilityCache.java).
+삼성 OS의 내부 구현이 이 소스와 같다고 가정하지 않는다.
+
+새 진단 버전은 **settings-guard-7**이다. 다음을 확인한다.
+
+1. 진단을 새로 켜고 `Accessibility reads: nodeCache=disabled (prefetch disabled)`인지 확인한다.
+   API <33 또는 실패/거부이면 보고서에 그 상태가 표시된다.
+2. 화면을 껐다 켜 인증 세션을 만료시킨 뒤, 설치된 앱 목록에서 2초 이상 기다리고
+   System Service에 진입한다. PIN 뒤로가기로 취소하고 느린 순간을 포함해 5~10회 반복한다.
+3. 콜백이 늦더라도 `source=window-watchdog`로 PIN이 먼저 실행되는지 확인한다.
+   이 경로에는 원인 이벤트가 없으므로 `eventDeliveryMs/eventToRequestMs`를 붙이지 않는다.
+   `Last Settings watchdog read`와 `Slow screen reads`에서 검사 시간/메인 전달 대기를 비교한다.
+4. 목록을 보기만 하거나 다른 접근성 서비스를 선택할 때 잠기지 않는지 확인한다.
+   PIN 인증 뒤 서비스 설정 변경을 허용하고, 취소 뒤 재진입하면 다시 잠기는지도 확인한다.
+5. 특별한 접근/앱 정보/기기 관리자/서랍 삭제 보호와 일반 앱 잠금/스케줄/알림 숨김,
+   화면 끄기/켜기, 회전, 서비스 재시작을 확인한다. Settings를 벗어나면 주기 검사가 멈춰야 한다.
+6. 삼성에서 개선 폭과 `scanMs`를 확인한 뒤 Xiaomi/HyperOS에서도 같은 항목을 확인한다.
+
+노드 조회 자체가 늦거나 앱 메인 스레드/OS가 정체되면 지연은 남을 수 있다.
+`Slow usage polls: 0`만으로 메인 스레드나 OS의 정체가 없었다고 결론 내리지 않는다.
+빌드/단위 테스트는 이벤트 전달 속도나 빠른 비활성화 방지를 보장하지 않는다.
+
 ## 간헐적인 지연: 여섯 번째 수정
 
 새 삼성 보고서의 마지막 기록은 `queueWaitMs=0`, `inspectToMatchMs=7`,
@@ -17,7 +70,7 @@
   느린 기록을 덮어쓰는 것을 줄인다. 자동 중지와 메모리 내 저장 정책은 유지한다.
 - 검사 결과의 시간 정보를 해당 보호 화면에 직접 연결한다. 기존 250ms 제한으로
   느린 검사와 실행 요청의 연결이 끊기던 진단의 빈틈을 없앤다.
-- 현재 진단 버전은 **settings-guard-6**이다.
+- 이 단계의 진단 버전은 **settings-guard-6**이다.
 
 | 항목 | 측정 범위 |
 | --- | --- |

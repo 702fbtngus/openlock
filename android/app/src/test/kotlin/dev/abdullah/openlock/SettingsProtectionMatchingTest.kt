@@ -203,4 +203,20 @@ class SettingsProtectionMatchingTest {
         assertTrue(guarded(title("Special access")))
         assertFalse(guarded(title("Apps"), row("Special access")))
     }
+
+    @Test fun watchdogSnapshotDoesNotNeedWindowEventMetadata() {
+        // The watchdog can see the new tree before its window/click event is
+        // delivered, so it deliberately supplies no inferred activity class.
+        assertTrue(guarded(title("System Service"), cls = null, serviceLabel = "System Service"))
+        assertTrue(guarded(ScreenNode(null, null, paneTitle = "System Service"),
+            cls = null, serviceLabel = "System Service"))
+        assertTrue(guarded(title("Special access"), row("OpenLock"), cls = null))
+        assertTrue(guarded(title("Draw over other apps"), row("Chrome"), cls = null))
+
+        // Returning to the list must not inherit the previous detail match.
+        assertFalse(guarded(title("Installed apps"), row("System Service"), toggle(),
+            cls = null, serviceLabel = "System Service"))
+        assertFalse(guarded(title("Apps"), row("Special access"), cls = null))
+        assertFalse(guarded(cls = null))
+    }
 }

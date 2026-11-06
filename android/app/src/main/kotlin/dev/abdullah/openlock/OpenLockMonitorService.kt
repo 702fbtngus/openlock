@@ -16,6 +16,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import java.util.Calendar
 import java.util.concurrent.ConcurrentHashMap
@@ -36,6 +37,7 @@ class OpenLockMonitorService : Service() {
 
     private val leftAppAt = ConcurrentHashMap<String, Long>()
     @Volatile private var screenOffAt: Long = 0L
+    private var screenInteractive = false
     private var lastForegroundPkg: String? = null
     private var lastLaunchedPkg: String? = null
     private var lastLaunchAt: Long = 0L
@@ -43,7 +45,11 @@ class OpenLockMonitorService : Service() {
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                Intent.ACTION_SCREEN_OFF -> screenOffAt = System.currentTimeMillis()
+                Intent.ACTION_SCREEN_OFF -> {
+                    screenOffAt = System.currentTimeMillis()
+                    screenInteractive = false
+                }
+                Intent.ACTION_SCREEN_ON -> screenInteractive = true
             }
         }
     }
@@ -86,11 +92,20 @@ class OpenLockMonitorService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
         store = ConfigStore.get(this)
         usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
+        screenInteractive = (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+        registerReceiver(screenReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        })
         GuardedScreen.onDetected = { pkg ->
             // The accessibility event identifies the active OS window directly;
             // do not wait for UsageStats or the next 300 ms poll.
             enforceGuardedScreen(pkg, System.currentTimeMillis())
+        }
+        GuardedScreen.shouldWatchSettings = {
+            val unlockedAt = LockSession.unlockedAt(UninstallGuard.SETTINGS_PACKAGE)
+            screenInteractive && store.pinHash() != null && store.preventUninstall() &&
+                (unlockedAt == 0L || screenOffAt > unlockedAt)
         }
         GuardedScreen.onBackFinished = { pkg ->
             // Cancellation did not authenticate. A quick re-entry must not
@@ -123,6 +138,7 @@ class OpenLockMonitorService : Service() {
         MonitorStartup.record(this, "monitor destroyed")
         GuardedScreen.onDetected = null
         GuardedScreen.onBackFinished = null
+        GuardedScreen.shouldWatchSettings = null
         runCatching { unregisterReceiver(screenReceiver) }
         super.onDestroy()
     }

@@ -6,7 +6,7 @@ import java.util.ArrayDeque
 
 /** Explicitly started, bounded, in-memory capture. No disk or network writes. */
 object GuardDiagnostics {
-    const val REVISION = "settings-guard-6"
+    const val REVISION = "settings-guard-7"
     private const val CAPTURE_MS = 10 * 60 * 1_000L
     private const val MAX_SNAPSHOTS = 8
     private var until = 0L
@@ -46,6 +46,12 @@ object GuardDiagnostics {
     private val recentLocks = ArrayDeque<String>()
     private val slowUsage = ArrayDeque<String>()
     private var lastUsage = "No usage poll captured."
+    private var accessibilityMode = "Accessibility service has not connected in this process."
+    private var lastWatch = "No Settings watchdog read captured."
+    private val slowInspections = ArrayDeque<String>()
+
+    // Connection state survives starting a new capture; no screen text here.
+    fun accessibilityMode(summary: String) { accessibilityMode = summary }
 
     private fun remember(history: ArrayDeque<String>, value: String) {
         history.addLast(value)
@@ -68,6 +74,8 @@ object GuardDiagnostics {
         recentLocks.clear()
         slowUsage.clear()
         lastUsage = "Waiting for a usage poll."
+        lastWatch = "Waiting for a Settings watchdog read."
+        slowInspections.clear()
         until = SystemClock.elapsedRealtime() + CAPTURE_MS
     }
 
@@ -109,6 +117,16 @@ object GuardDiagnostics {
         if (queryMs >= 100L || deliveryMs >= 100L || error != null) remember(slowUsage, lastUsage)
     }
 
+    fun inspection(source: String, pkg: String?, windowId: Int, startedAt: Long, finishedAt: Long, guarded: Boolean) {
+        if (!isCapturing()) return
+        val scanMs = finishedAt - startedAt
+        val deliveryMs = SystemClock.elapsedRealtime() - finishedAt
+        val summary = "source=$source atElapsedMs=$startedAt package=$pkg windowId=$windowId " +
+            "guarded=$guarded scanMs=$scanMs deliveryToMainMs=$deliveryMs"
+        if (source == "window-watchdog") lastWatch = summary
+        if (scanMs >= 100L || deliveryMs >= 100L) remember(slowInspections, summary)
+    }
+
     fun lockRequested(pkg: String, timing: DetectionTiming? = null) {
         if (!isCapturing()) return
         val now = SystemClock.elapsedRealtime()
@@ -147,17 +165,21 @@ object GuardDiagnostics {
 
     fun report(): String = buildString {
         appendLine("Capture active: ${isCapturing()} (auto-stops after 10 minutes)")
+        appendLine("Accessibility reads: $accessibilityMode")
         appendLine("Last event: $lastEvent")
         appendLine("Monitor decision: $enforcement")
         appendLine("Lock activity: $lastLaunch")
         appendLine("Lock timing (Activity resume/first draw callback, not GPU presentation): $latency")
         appendLine("Last usage poll (background worker): $lastUsage")
+        appendLine("Last Settings watchdog read: $lastWatch")
         appendLine("Recent lock requests/resumes: ${recentLocks.size}")
         recentLocks.forEach { appendLine(it) }
         appendLine("Recent Settings window/click/slow events: ${recentEvents.size}")
         recentEvents.forEach { appendLine(it) }
         appendLine("Slow usage polls (query or main delivery >=100ms): ${slowUsage.size}")
         slowUsage.forEach { appendLine(it) }
+        appendLine("Slow screen reads (scan or main delivery >=100ms): ${slowInspections.size}")
+        slowInspections.forEach { appendLine(it) }
         appendLine("Screen snapshots: ${snapshots.size}")
         snapshots.values.forEach { appendLine(it) }
     }

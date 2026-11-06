@@ -1,5 +1,6 @@
 package dev.abdullah.openlock
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,5 +33,18 @@ class GuardTimingTest {
         val result = timing.metrics(1_000, 1_010)
         assertTrue("source=service-entry-click" in result)
         assertTrue("eventDeliveryMs=unknown" in result)
+    }
+
+    @Test fun watchdogTimingDoesNotAttributeAnUndeliveredEvent() {
+        val timing = GuardDiagnostics.DetectionTiming("com.android.settings", 1_000, 1_005,
+            1_012, 1_014, event = null, source = "window-watchdog")
+        val result = timing.metrics(1_015, 1_025)
+        for (metric in listOf("source=window-watchdog", "queueWaitMs=5", "inspectToMatchMs=7",
+                "scanToMainMs=2", "matchToRequestMs=3", "requestToResumeMs=10")) {
+            assertTrue("Missing $metric in $result", metric in result)
+        }
+        for (field in listOf("event=#", "eventType=", "eventDeliveryMs=", "eventToRequestMs=")) {
+            assertFalse("Watchdog fabricated $field in $result", field in result)
+        }
     }
 }
