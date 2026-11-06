@@ -14,9 +14,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
-import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.TextView
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -57,31 +55,6 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     private var backNavigation: GuardBackNavigation? = null
     private var backTarget: String? = null
     private var navigationCover: View? = null
-    private val inspectionGate = SettingsInspectionGate()
-    private var inspectionCover: View? = null
-    private val inspectionCoverPoller = object : Runnable {
-        override fun run() {
-            if (inspectionCover == null) return
-            if (!GuardedScreen.needsSettingsWatch() || backNavigation != null) {
-                dismissInspectionCover("policy inactive or navigating back")
-                return
-            }
-            when (inspectionGate.timeout(SystemClock.elapsedRealtime())) {
-                SettingsInspectionGate.TimeoutAction.NONE -> Unit
-                SettingsInspectionGate.TimeoutAction.REQUEST_PIN -> {
-                    GuardDiagnostics.cover("inspection timed out; requesting PIN")
-                    GuardedScreen.set(UninstallGuard.SETTINGS_PACKAGE)
-                }
-                SettingsInspectionGate.TimeoutAction.HOME -> {
-                    // A refused activity launch must not expose an unverified
-                    // screen. Home/Back/Power remain available under the cover.
-                    val accepted = performGlobalAction(GLOBAL_ACTION_HOME)
-                    GuardDiagnostics.cover("PIN handoff timed out; Home accepted=$accepted")
-                }
-            }
-            handler.postDelayed(this, SETTINGS_WATCH_MS)
-        }
-    }
     private val navigationPoller = object : Runnable {
         override fun run() {
             if (backNavigation == null) return
@@ -93,6 +66,18 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     private var lastDiagnosticSignature: Int? = null
     private val ownLabel by lazy { applicationInfo.loadLabel(packageManager).toString() }
     private val serviceLabel by lazy { getString(R.string.guard_accessibility_label) }
+    private val appInfoEntry by lazy {
+        // Local manifest/resources only: event callbacks must not wait on the
+        // worker's synchronized ownLabel lazy or a PackageManager lookup.
+        val info = applicationInfo
+        val label = info.nonLocalizedLabel?.toString() ?: info.labelRes.takeIf { it != 0 }?.let {
+            runCatching { resources.getString(it) }.getOrNull()
+        } ?: packageName
+        AppInfoEntryGuard(label, packageName)
+    }
+    // Populated on the scan worker. A click must not wait for PackageManager
+    // resource lookup, or for a synchronized lazy currently loading there.
+    @Volatile private var clickSpecialAccessTitles: Set<String> = emptySet()
 
     // Resolve known Settings resource names in the device locale where available.
     private val localizedTitles by lazy {
@@ -118,9 +103,6 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         GuardDiagnostics.accessibilityMode("nodeCache=$cacheMode settingsWatchIntervalMs=$SETTINGS_WATCH_MS")
         MonitorStartup.restoreAsync(this, "accessibility_connected")
         GuardedScreen.onBackRequested = ::startBackNavigation
-        GuardedScreen.onLockDrawn = { target ->
-            if (LockActivity.visiblePackage == target) dismissInspectionCover("PIN first draw")
-        }
         inspectWindow()
         scheduleRechecks()
     }
@@ -131,33 +113,28 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                 "class=${event.className} windowId=${event.windowId} changes=${event.contentChangeTypes}",
             event.packageName?.toString(), event.windowId, event.eventType, event.eventTime)
         if (!OpenLockMonitorService.isRunning) MonitorStartup.restoreAsync(this, "accessibility_event")
-        // Some OEMs announce non-focusable overlay containers as windows.
-        // They are not an exit to MainActivity or the PIN activity.
-        if (inspectionCover != null && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            event.packageName?.toString() == packageName &&
-            event.className?.toString() in setOf(FrameLayout::class.java.name, LinearLayout::class.java.name)) return
         when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> {
+                val node = ScreenNode(null, event.contentDescription?.toString(), className = event.className?.toString())
+                val armed = !event.isPassword && appInfoEntry.longClicked(event.packageName?.toString(),
+                    node, event.text.map { it.toString() }, SystemClock.elapsedRealtime())
+                if (event.isPassword) appInfoEntry.clear()
+                if (armed) GuardDiagnostics.snapshot("own-launcher-long-click",
+                    "Own Samsung launcher icon long-clicked; waiting for an App info action. class=${node.className}")
+                return
+            }
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                if (detectServiceEntryClick(event, eventTiming)) scheduleRechecks()
+                if (detectGuardEntryClick(event, eventTiming)) scheduleRechecks()
                 return
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                val pkg = event.packageName?.toString()
-                if (pkg == UninstallGuard.SETTINGS_PACKAGE) {
-                    // Attach BEFORE asking the monitor/worker to inspect this
-                    // window. No Settings node or event.source is read here.
-                    beginInspectionCover("Settings window changed")
-                } else if (pkg != null && pkg != "com.android.systemui" &&
-                    !(pkg == packageName && (LockActivity.visiblePackage != null ||
-                        event.className?.toString() == LockActivity::class.java.name))) {
-                    dismissInspectionCover("left Settings")
-                }
                 GuardedScreen.windowChanged(event.packageName?.toString())
                 windowEpoch++
                 windowEventTiming = eventTiming
                 windowPackage = event.packageName?.toString()
                 windowClass = event.className?.toString()
                 windowId = event.windowId
+                appInfoEntry.windowChanged(windowPackage)
                 handler.removeCallbacks(recheck)
                 settingsWatchState.observePackage(windowPackage, SystemClock.elapsedRealtime())
                 scheduleSettingsWatch()
@@ -165,16 +142,6 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 if (event.packageName?.toString()?.let(UninstallGuard::isCandidatePackage) != true) return
-                if (event.packageName?.toString() == UninstallGuard.SETTINGS_PACKAGE &&
-                    (event.contentChangeTypes == AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED ||
-                        event.contentChangeTypes and (AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE or
-                            AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_TITLE or
-                            AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_APPEARED or
-                            AccessibilityEvent.CONTENT_CHANGE_TYPE_PANE_DISAPPEARED) != 0)) {
-                    // OEMs also change fragments inside the same window ID.
-                    beginInspectionCover("Settings structure changed")
-                    if (inspectionCover != null) windowEpoch++
-                }
                 windowEventTiming = eventTiming
             }
             else -> return
@@ -187,29 +154,57 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         val paneTitle = if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && paneChange) {
             event.text.firstOrNull()?.toString()
         } else null
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.packageName?.toString() == UninstallGuard.SETTINGS_PACKAGE &&
+            UninstallGuard.isDeviceAdminScreenClass(UninstallGuard.SETTINGS_PACKAGE, windowClass)) {
+            requestEntryLock("device-admin-window", eventTiming, SystemClock.elapsedRealtime())
+            return // Class metadata is sufficient; scheduled rechecks still run.
+        }
         inspectWindow(paneTitle, event.packageName?.toString(), event.windowId, eventTiming)
     }
 
-    private fun detectServiceEntryClick(event: AccessibilityEvent, eventTiming: GuardDiagnostics.EventTiming?): Boolean {
-        if (event.packageName?.toString() != UninstallGuard.SETTINGS_PACKAGE ||
-            windowPackage != UninstallGuard.SETTINGS_PACKAGE || event.windowId != windowId ||
-            event.isPassword) return false
+    private fun detectGuardEntryClick(event: AccessibilityEvent, eventTiming: GuardDiagnostics.EventTiming?): Boolean {
+        val pkg = event.packageName?.toString()
+        if (event.isPassword || (pkg != UninstallGuard.SETTINGS_PACKAGE && pkg != AppInfoEntryGuard.SAMSUNG_LAUNCHER) ||
+            (pkg == UninstallGuard.SETTINGS_PACKAGE && windowPackage != UninstallGuard.SETTINGS_PACKAGE)) return false
         val startedAt = SystemClock.elapsedRealtime()
         val cls = event.className?.toString() ?: return false
         // Use only event metadata here: fetching event.source/root can itself
         // wait on Settings' Binder response, defeating this fast path.
-        if (cls !in ENTRY_CLICK_CLASSES) return false
         val node = ScreenNode(null, event.contentDescription?.toString(), className = cls)
-        if (!UninstallGuard.isOwnServiceEntryClick(UninstallGuard.SETTINGS_PACKAGE,
-                node, event.text.map { it.toString() }, serviceLabel)) return false
+        val texts = event.text.map { it.toString() }
+        if (pkg == AppInfoEntryGuard.SAMSUNG_LAUNCHER && appInfoEntry.hasLauncherContext(startedAt) &&
+            GuardDiagnostics.isCapturing()) {
+            GuardDiagnostics.snapshot("own-launcher-action", "Own-icon context; class=$cls " +
+                "description=${node.text?.take(120)} texts=${texts.take(4).map { it.take(120) }}")
+        }
+        val appInfo = appInfoEntry.clicked(pkg, event.windowId, windowClass, node, texts, startedAt)
+        val ownService = pkg == UninstallGuard.SETTINGS_PACKAGE && event.windowId == windowId && cls in ENTRY_CLICK_CLASSES &&
+            UninstallGuard.isOwnServiceEntryClick(UninstallGuard.SETTINGS_PACKAGE, node, texts, serviceLabel)
+        // A menu popup can have its own ID before its window-state event has
+        // arrived. Exact Special access click metadata is sufficient there;
+        // the original own-service path retains its same-window validation.
+        val specialAccess = event.windowId >= 0 && UninstallGuard.isSpecialAccessEntryClick(
+            pkg.orEmpty(), windowClass, node, texts, clickSpecialAccessTitles)
+        val deviceAdmin = event.windowId >= 0 && UninstallGuard.isDeviceAdminEntryClick(pkg.orEmpty(), windowClass, node, texts)
+        val source = when {
+            ownService -> "service-entry-click"
+            specialAccess -> "special-access-entry-click"
+            deviceAdmin -> "device-admin-entry-click"
+            appInfo == AppInfoEntryGuard.Entry.SETTINGS_APP_ROW -> "own-app-row-click"
+            appInfo == AppInfoEntryGuard.Entry.LAUNCHER_APP_INFO -> "launcher-app-info-click"
+            else -> return false
+        }
+        requestEntryLock(source, eventTiming, startedAt)
+        return true
+    }
+
+    private fun requestEntryLock(source: String, eventTiming: GuardDiagnostics.EventTiming?, startedAt: Long) {
         val timing = GuardDiagnostics.scan(UninstallGuard.SETTINGS_PACKAGE, startedAt, SystemClock.elapsedRealtime(), true,
-            event = eventTiming, source = "service-entry-click")
-        GuardDiagnostics.snapshot("service-entry-click", "Own accessibility entry clicked; requesting lock before detail controls load.")
-        beginInspectionCover("own service clicked")
-        if (inspectionCover != null) inspectionGate.requirePin(SystemClock.elapsedRealtime())
+            event = eventTiming, source = source)
+        GuardDiagnostics.snapshot(source, "Protected Settings entry detected ($source); requesting existing PIN.")
         windowEpoch++ // Invalidate an older list scan still in progress.
         GuardedScreen.set(UninstallGuard.SETTINGS_PACKAGE, timing)
-        return true
     }
 
     private fun scheduleRechecks() {
@@ -284,9 +279,8 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                     GuardDiagnostics.inspection(source, result?.pkg, result?.id ?: -1,
                         result?.startedAt ?: startedAt, finishedAt,
                         result?.guarded == true, rootReadMs = result?.rootReadMs,
-                        accepted = accepted, outcome = outcome, queuedAt = queuedAt,
-                        complete = result?.complete)
-                    if (accepted && result != null) applyInspection(result, source, request == inspectionSequence)
+                        accepted = accepted, outcome = outcome, queuedAt = queuedAt)
+                    if (accepted && result != null) applyInspection(result, source)
                 } finally {
                     GuardDiagnostics.readFinished(trace)
                     // Completion, stale epoch and failed reads all rearm the
@@ -310,7 +304,6 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         val reason: String? = null,
         val event: GuardDiagnostics.EventTiming? = null,
         val rootReadMs: Long? = null,
-        val complete: Boolean = false,
     )
 
     @Suppress("DEPRECATION")
@@ -345,20 +338,26 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
             if (eventPaneTitle != null && eventPackage == rootPkg && eventWindowId == root.windowId) {
                 initialNodes.add(ScreenNode(null, null, paneTitle = eventPaneTitle))
             }
-            fun matches(nodes: List<ScreenNode>) = UninstallGuard.isGuardedScreen(
-                windowPackage = rootPkg,
-                windowClass = cls,
-                nodes = nodes,
-                ownLabel = ownLabel,
-                ownPackage = packageName,
-                ownServiceLabel = serviceLabel,
-                localizedSpecialAccessTitles = if (rootPkg == UninstallGuard.SETTINGS_PACKAGE) localizedTitles else emptySet(),
-            )
+            fun matches(nodes: List<ScreenNode>): Boolean {
+                val specialAccessTitles = if (rootPkg == UninstallGuard.SETTINGS_PACKAGE) {
+                    localizedTitles.also { clickSpecialAccessTitles = it }
+                } else emptySet()
+                return UninstallGuard.isGuardedScreen(
+                    windowPackage = rootPkg,
+                    windowClass = cls,
+                    nodes = nodes,
+                    ownLabel = ownLabel,
+                    ownPackage = packageName,
+                    ownServiceLabel = serviceLabel,
+                    localizedSpecialAccessTitles = specialAccessTitles,
+                )
+            }
             // These are the SAME positive rules as the full matcher. A known
             // class or confirmed pane title can prove a match without a walk.
             var guarded = UninstallGuard.isSpecialAccessScreenClass(rootPkg, cls) ||
+                UninstallGuard.isDeviceAdminScreenClass(rootPkg, cls) ||
                 (initialNodes.isNotEmpty() && matches(initialNodes))
-            val tree = if (guarded) FlattenedWindow(initialNodes, complete = false) else flatten(root, initialNodes, trace) { partial ->
+            val nodes = if (guarded) initialNodes else flatten(root, initialNodes, trace) { partial ->
                 if (epoch != windowEpoch) return@flatten true
                 // All positive rules require only accumulated evidence; extra
                 // descendants cannot invalidate a match. Negative results still
@@ -366,17 +365,11 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                 guarded = matches(partial)
                 guarded
             }
-            val nodes = tree.nodes
             GuardDiagnostics.readStage(trace, "match", nodes.size)
             if (!guarded) guarded = matches(nodes)
             val matchedAt = SystemClock.elapsedRealtime()
             return Inspection(rootPkg, cls, root.windowId, nodes, guarded, nodes.isNotEmpty(),
-                startedAt = scanStartedAt, finishedAt = matchedAt, rootReadMs = rootReadMs,
-                complete = tree.complete && nodes.size >= 3 && nodes.any {
-                    !it.text.isNullOrBlank() && !it.inToolbar && it.paneTitle == null &&
-                        it.viewId?.substringAfter(":id/") !in PAGE_TITLE_IDS
-                } &&
-                    nodes.none { it.className?.endsWith("ProgressBar") == true })
+                startedAt = scanStartedAt, finishedAt = matchedAt, rootReadMs = rootReadMs)
         } catch (error: RuntimeException) {
             // A transitioning Settings tree can become invalid while walking it.
             // Keep the service alive and let the content event/rechecks retry.
@@ -390,39 +383,15 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     }
 
     /** Only immutable scan data crosses threads; all UI/session state stays here. */
-    private fun applyInspection(result: Inspection, source: String, newest: Boolean) {
+    private fun applyInspection(result: Inspection, source: String) {
         val pkg = result.pkg
         val timing = if (pkg != null) GuardDiagnostics.scan(pkg, result.startedAt, result.finishedAt,
             result.guarded, result.queuedAt,
             event = result.event?.takeIf { it.pkg == pkg && it.windowId == result.id }, source = source) else null
         settingsWatchState.observePackage(pkg, SystemClock.elapsedRealtime())
+        appInfoEntry.observeScreen(pkg, result.cls, result.id, result.nodes)
         advanceBackNavigation(pkg, result.guarded, result.contentReady)
-        if (pkg == UninstallGuard.SETTINGS_PACKAGE && result.guarded) {
-            beginInspectionCover("protected Settings screen")
-            if (inspectionCover != null) inspectionGate.requirePin(SystemClock.elapsedRealtime())
-        }
-        if (result.guarded && pkg != null) {
-            GuardedScreen.set(pkg, timing)
-        } else if (!inspectionGate.awaitingPin) {
-            GuardedScreen.clear()
-        }
-        if (newest && inspectionCover != null) {
-            if (pkg != null && pkg != UninstallGuard.SETTINGS_PACKAGE) {
-                // A non-focusable accessibility overlay leaves the active root
-                // underneath inspectable. A different root confirms an exit.
-                // MainActivity's real window event clears the cover above.
-                // An own-package root alone could be this overlay on an OEM.
-                if (pkg != packageName) {
-                    dismissInspectionCover("different active root")
-                }
-            } else if (pkg == UninstallGuard.SETTINGS_PACKAGE && !result.guarded &&
-                inspectionGate.allowScreen(result.complete &&
-                    (windowPackage != UninstallGuard.SETTINGS_PACKAGE || windowId < 0 || result.id == windowId),
-                    result.nodes.hashCode(),
-                    result.startedAt, SystemClock.elapsedRealtime())) {
-                dismissInspectionCover("complete stable unguarded screen")
-            }
-        }
+        if (result.guarded && pkg != null) GuardedScreen.set(pkg, timing) else GuardedScreen.clear()
         if (result.reason != null) {
             if (pkg != packageName) GuardDiagnostics.snapshot("read:$pkg", result.reason)
         } else if (pkg != null) {
@@ -437,10 +406,10 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         windowEpoch++
         inspectionSequence++
         inspectionPending = false
+        appInfoEntry.clear()
         scanHandler.removeCallbacksAndMessages(null)
         if (backNavigation != null) performGlobalAction(GLOBAL_ACTION_HOME)
         finishBackNavigation()
-        dismissInspectionCover("service interrupted")
         handler.removeCallbacks(recheck)
         settingsWatchState.stop("interrupt")
         handler.removeCallbacks(settingsWatch)
@@ -452,16 +421,15 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         GuardedScreen.windowChanged()
         destroyed = true
+        appInfoEntry.clear()
         windowEpoch++
         inspectionSequence++
         inspectionPending = false
         scanHandler.removeCallbacksAndMessages(null)
         scanThread.quitSafely()
         GuardedScreen.onBackRequested = null
-        GuardedScreen.onLockDrawn = null
         if (backNavigation != null) performGlobalAction(GLOBAL_ACTION_HOME)
         finishBackNavigation()
-        dismissInspectionCover("service destroyed")
         handler.removeCallbacks(recheck)
         settingsWatchState.stop("destroy")
         handler.removeCallbacks(settingsWatch)
@@ -474,78 +442,20 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     private fun startBackNavigation(pkg: String): Boolean {
         if (pkg != UninstallGuard.SETTINGS_PACKAGE) return false
         if (backNavigation != null) return backTarget == pkg
-        val cover = createLoadingCover()
-        if (!attachLoadingCover(cover)) return false
-        navigationCover = cover
-        dismissInspectionCover("back-navigation cover attached")
-        backTarget = pkg
-        backNavigation = GuardBackNavigation(pkg, packageName, SystemClock.elapsedRealtime())
-        GuardedScreen.backNavigationPackage = pkg
-        handler.post(navigationPoller)
-        return true
-    }
-
-    private fun beginInspectionCover(reason: String) {
-        if (destroyed || backNavigation != null || LockActivity.visiblePackage != null ||
-            !GuardedScreen.needsSettingsWatch()) return
-        inspectionGate.begin(SystemClock.elapsedRealtime())
-        if (inspectionCover != null) return
-        val cover = createLoadingCover(getString(R.string.guard_checking_settings))
-        if (!attachLoadingCover(cover)) {
-            inspectionGate.clear()
-            GuardDiagnostics.cover("could not attach inspection cover; requesting PIN")
-            GuardedScreen.set(UninstallGuard.SETTINGS_PACKAGE)
-            return
-        }
-        inspectionCover = cover
-        GuardDiagnostics.cover("visible: $reason")
-        handler.post(inspectionCoverPoller)
-    }
-
-    private fun dismissInspectionCover(reason: String) {
-        handler.removeCallbacks(inspectionCoverPoller)
-        val cover = inspectionCover
-        inspectionCover = null
-        inspectionGate.clear()
-        if (cover != null) {
-            runCatching { (getSystemService(WINDOW_SERVICE) as WindowManager).removeViewImmediate(cover) }
-            GuardDiagnostics.cover("hidden: $reason")
-        }
-    }
-
-    private fun createLoadingCover(status: String? = null): View {
         val palette = LockPalette.resolve(this)
         val indicatorSize = (32 * resources.displayMetrics.density).toInt()
-        return FrameLayout(this).apply {
+        val cover = FrameLayout(this).apply {
             setBackgroundColor(palette.background)
             isClickable = true
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-            val content = LinearLayout(this@OpenLockGuardAccessibilityService).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-            }
-            content.addView(
+            addView(
                 ProgressBar(this@OpenLockGuardAccessibilityService).apply {
                     isIndeterminate = true
                     indeterminateTintList = ColorStateList.valueOf(palette.accent)
                 },
-                LinearLayout.LayoutParams(indicatorSize, indicatorSize),
+                FrameLayout.LayoutParams(indicatorSize, indicatorSize, Gravity.CENTER),
             )
-            if (status != null) content.addView(TextView(this@OpenLockGuardAccessibilityService).apply {
-                text = status
-                setTextColor(palette.accent)
-                textSize = 14f
-                gravity = Gravity.CENTER
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (20 * resources.displayMetrics.density).toInt()
-            })
-            addView(content, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT))
         }
-    }
-
-    private fun attachLoadingCover(cover: View): Boolean {
         // A non-focusable accessibility overlay blocks touches while keeping
         // the underlying Settings window available for global Back/inspection.
         val params = WindowManager.LayoutParams(
@@ -556,7 +466,13 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
             PixelFormat.OPAQUE,
         )
         val manager = getSystemService(WINDOW_SERVICE) as WindowManager
-        return runCatching { manager.addView(cover, params) }.isSuccess
+        if (runCatching { manager.addView(cover, params) }.isFailure) return false
+        navigationCover = cover
+        backTarget = pkg
+        backNavigation = GuardBackNavigation(pkg, packageName, SystemClock.elapsedRealtime())
+        GuardedScreen.backNavigationPackage = pkg
+        handler.post(navigationPoller)
+        return true
     }
 
     private fun advanceBackNavigation(pkg: String?, guarded: Boolean, contentReady: Boolean) {
@@ -609,20 +525,17 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         val inList: Boolean,
     )
 
-    private data class FlattenedWindow(val nodes: List<ScreenNode>, val complete: Boolean)
-
     @Suppress("DEPRECATION")
     private fun flatten(
         root: AccessibilityNodeInfo,
         initialNodes: List<ScreenNode>,
         trace: GuardDiagnostics.ReadToken?,
         shouldStop: (List<ScreenNode>) -> Boolean,
-    ): FlattenedWindow {
+    ): List<ScreenNode> {
         val out = ArrayList(initialNodes)
         val stack = ArrayDeque<PendingNode>()
         stack.addLast(PendingNode(root, false, false, false))
         var visited = 0
-        var childrenAvailable = true
         var nextMatchCheck = MATCH_CHECK_INTERVAL
         try {
             while (stack.isNotEmpty() && visited++ < MAX_NODES) {
@@ -660,7 +573,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                         UninstallGuard.isOwnServiceTitle(it, serviceLabel)
                     }
                     if (serviceTitle || visited == 1 || visited >= nextMatchCheck) {
-                        if (shouldStop(out)) return FlattenedWindow(out, complete = false)
+                        if (shouldStop(out)) return out
                         if (visited >= nextMatchCheck) {
                             nextMatchCheck = if (nextMatchCheck < 32) nextMatchCheck + MATCH_CHECK_INTERVAL
                                 else nextMatchCheck * 2
@@ -668,18 +581,16 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
                     }
                     for (i in node.childCount - 1 downTo 0) {
                         if (trace != null) GuardDiagnostics.readStage(trace, "child[$i]", visited)
-                        val child = node.getChild(i)
-                        if (child != null) stack.addLast(PendingNode(child, inToolbar, clickable, inList))
-                        else childrenAvailable = false
+                        node.getChild(i)?.let { stack.addLast(PendingNode(it, inToolbar, clickable, inList)) }
                     }
                 } finally {
                     if (node !== root) node.recycle()
                 }
             }
-            return FlattenedWindow(out, complete = stack.isEmpty() && childrenAvailable)
         } finally {
             for (pending in stack) if (pending.node !== root) pending.node.recycle()
         }
+        return out
     }
 
     private fun captureDiagnostics(pkg: String, cls: String?, id: Int, nodes: List<ScreenNode>, guarded: Boolean, scanMs: Long) {
@@ -732,7 +643,6 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         val ENTRY_CLICK_CLASSES = setOf("android.widget.LinearLayout", "android.widget.RelativeLayout",
             "android.widget.FrameLayout", "android.view.ViewGroup")
         val TOOLBAR_IDS = setOf("action_bar", "toolbar", "collapsing_toolbar", "action_bar_container")
-        val PAGE_TITLE_IDS = setOf("action_bar_title", "toolbar_title", "collapsing_toolbar_title")
         val TITLE_RESOURCES = listOf(
             "special_access", "special_access_title", "special_access_settings_title",
             "overlay_settings", "draw_overlay", "alarms_and_reminders_title",
@@ -762,7 +672,6 @@ object GuardedScreen {
     var onDetected: ((String) -> Unit)? = null
     var onBackRequested: ((String) -> Boolean)? = null
     var onBackFinished: ((String) -> Unit)? = null
-    var onLockDrawn: ((String) -> Unit)? = null
     var shouldWatchSettings: (() -> Boolean)? = null
     var onWindowChanged: ((String?) -> Unit)? = null
     var backNavigationPackage: String? = null

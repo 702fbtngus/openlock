@@ -1,57 +1,101 @@
 # 설정 화면 보호 변경 및 기기 테스트
 
-## 설정 검사 중 로딩 화면: 아홉 번째 수정
+## 앱 정보 진입 감지 및 기기 관리자 영역 보호
 
-사용자가 요청한 방식으로 Settings 창 전환 시 먼저 터치를 막고 구조를 검사한다.
-PIN이 있고 삭제 방지가 켜져 있으며 Settings 인증 세션이 잠겨 있을 때 적용한다.
+현재 진단 버전은 **settings-guard-8-entry**이다. guard-8 재검사와 기존 PIN 흐름을
+유지하며, guard-9의 설정 검사 로딩은 사용하지 않는다.
 
-- Settings의 창 상태 변경 및 구조/서브트리 변경 이벤트를 받으면, 노드를 읽기 전에
-  앱 테마 배경과 회전 표시, **Checking settings…** 문구의 로딩 화면을 붙인다.
-  API는 `TYPE_ACCESSIBILITY_OVERLAY`이며 PiP나 새로운 권한은 사용하지 않는다.
-  Android 문서에 따라 이 오버레이 아래의 창도 계속 검사할 수 있다.
-- 일반 화면은 트리를 끝까지 읽었고, 본문 텍스트가 있으며, 보이는 ProgressBar가
-  없어야 해제 후보가 된다. 빈 root, 누락된 자식 노드, 600개 상한으로 잘린 검사,
-  이전 창/이전 요청 결과는 로딩 해제의 근거로 사용하지 않는다.
-- 전환 후 최소 200ms가 지나고 같은 구조가 최소 100ms 간격으로 두 번 확인되면
-  일반 설정 화면을 보여준다. 150ms 주기 검사는 매번 로딩을 새로 띄우지 않는다.
-  스크롤 등으로 서브트리 변경 이벤트가 발생하면 다시 잠깐 로딩할 수 있다.
-- 보호 화면이면 로딩을 유지한 채 기존 PIN을 요청한다. `LockActivity`의 첫 onDraw
-  후 콜백에서 로딩을 걷어낸다. 단순 onResume이나 오래된 Activity의 콜백만으로
-  설정을 노출하지 않는다. 이 콜백은 진단 캡처가 꺼져 있어도 실행한다.
-- 약 3초 동안 안전한 화면을 확인하지 못하면 기존 Settings PIN을 요청한다.
-  PIN 첫 그리기도 추가 약 3초 동안 확인하지 못하면 Home을 시도한다. 검사 실패를
-  시간 제한으로 자동 허용하지 않는다. 이 경우 일반 설정에서도 PIN이 나올 수 있다.
-- Home/Back/Power는 기존 시스템 동작을 유지한다. 다른 앱으로 이동하거나 화면이
-  꺼지고, 인증이 완료되거나 보호가 중지되거나 서비스가 종료되면 검사 로딩을
-  제거한다. PIN 취소 시에는 기존 뒤로가기 로딩 화면으로 전환한다.
-- 실제 보호 화면 판별과 Settings 인증 세션은 기존 정책을 유지한다. 인증 후에는
-  화면을 끌 때까지 Settings를 사용할 수 있다. 별도의 임시 인증 우회는 만들지 않는다.
+| 경로 | 조기 감지 조건과 동작 |
+| --- | --- |
+| 설정 → 애플리케이션 → OpenLock | 현재 창을 앱 목록으로 확인했고 OpenLock 행이 보였을 때, 같은 창에서 그 이름/패키지의 실제 클릭을 받으면 PIN 요청 (`own-app-row-click`) |
+| 삼성 서랍 → OpenLock 길게 누르기 → 정보 | One UI Home의 OpenLock 아이콘 long-click 후 5초 안에 정보 버튼 클릭까지 확인하면 PIN 요청 (`launcher-app-info-click`) |
+| 기기 관리자 목록/개별 관리자 설정 | 메뉴 클릭 (`device-admin-entry-click`), 구분되는 화면 클래스 (`device-admin-window`), 실제 페이지 제목/트리 중 먼저 확인한 경로로 PIN 요청 |
 
-진단 헤더는 **settings-guard-9**이며 `Settings inspection cover`,
-`Recent Settings inspection cover changes`, 검사 결과의 `complete`를 추가했다.
-조기 보호 판정은 트리 읽기를 중단하므로 `guarded=true complete=false`도 정상이다.
+일반 앱 목록을 보기만 하거나 OpenLock 아이콘을 길게 누르기만 해서는 잠그지 않는다.
+다른 아이콘 long-click, 다른 바로가기 클릭, 다른 앱으로 이동, 5초 경과, 서비스 중단은
+런처 진입 근거를 무효화한다. 앱 목록의 근거도 창이 바뀌거나 다른 화면을 읽으면 버린다.
+런처 팝업에는 다른 창 ID가 붙을 수 있으므로 own-icon 근거와 실제 정보 동작을 함께 쓴다.
 
-삼성에서 먼저 다음을 확인하고 Xiaomi/HyperOS에서도 별도로 검증한다.
+기기 관리자 영역은 이제 **다른 앱을 포함한 목록/등록/해제 화면 전체**가 보호 대상이다.
+기존 `isAboutOwnApp` 판별은 유지하며 전체 화면 보호를 별도로 추가했다. PIN 인증 후에는
+기존 Settings 세션으로 정상적인 관리자 등록/해제를 허용한다. 검색/보안 설정 목록에서
+기기 관리자 항목이 보인다는 이유만으로 해당 목록 전체를 잠그지 않는다.
 
-1. 화면을 껐다 켜고 Settings를 열면 로딩 후 일반 설정이 사용 가능한지 확인한다.
-2. 특별한 접근 메뉴/하위 상세, OpenLock 앱 정보, System Service 상세에 진입할 때
-   로딩에서 PIN으로 이어지고, 로딩 중 뒤의 버튼이 눌리지 않는지 확인한다.
-3. 앱 목록, 검색, 스크롤, 일반 토글, 팝업, 회전에서도 로딩이 정상 종료되는지 본다.
-   지속적으로 PIN으로 전환되면 진단의 `complete=false`와 로딩 이력을 확인한다.
-4. PIN/생체 인증 후 설정 변경이 가능하고, 화면을 껐다 켜면 다시 보호되는지 본다.
-5. PIN 뒤로가기 취소, 로딩 중 Home/Back/Power, 알림창, 앱 전환, 서비스 중지/재시작,
-   휴대폰 전체 잠금 스케줄과 겹칠 때 가림막이 남거나 PIN을 가리지 않는지 확인한다.
-6. 진단을 끈 평소 사용에서도 PIN으로 정상 전환되는지 확인한다.
+런처 처리는 Samsung One UI Home (`com.sec.android.app.launcher`)의 이벤트 메타데이터만
+사용한다. 런처 전체 트리를 새로 수집하지 않으며 다른 런처를 지원한다고 가정하지 않는다.
+클릭/long-click에 이름·정보 동작이 없거나 예상하지 않은 클래스라면 기존 앱 정보 헤더
+감지가 계속 동작한다. 근거가 부족한 상태에서 모든 정보 버튼이나 앱 목록을 잠그지 않는다.
+따라서 이 두 경로에서도 실기기 이벤트 확인 전 조기 감지가 된다고 단정할 수 없다.
 
-`SettingsInspectionGateTest`는 오래된 읽기·미완성 읽기·구조 변경·PIN 인계·시간 제한을
-검증한다. 로컬 Java/Flutter 부재로 테스트 실행과 빌드는 Actions에서 확인해야 한다.
+삼성 기기에서 확인할 항목:
 
-**한계:** 로딩은 창 변경 통지를 받은 뒤 붙일 수 있다. 통지 자체가 늦으면 그 전에
-노출되는 시간은 남는다. 같은 창에서 아직 통지되지 않은 UI 변경도 즉시 차단한다고
-보장하지 않는다. 이 방식은 조회 대기 중의 터치를 줄이며, 시스템 설정 전환을
-동기적으로 가로채는 기능이나 안전 모드/ADB 등의 우회 차단은 아니다.
+1. 화면을 껐다 켜 Settings 인증 세션을 만료시키고 진단을 시작한다.
+2. 앱 목록을 보기만 하면 PIN이 없고 OpenLock 행을 누르면 `own-app-row-click`가
+   기록되는지 확인한다. Chrome 등 다른 앱 정보와 검색 입력은 불필요하게 잠기지 않아야 한다.
+3. 서랍의 OpenLock 아이콘 long-click만으로 PIN이 없어야 한다. 바로 정보 버튼을 누르면
+   `launcher-app-info-click`가 기록되는지 확인한다. 5초 넘게 기다린 경우에는 기존 상세
+   화면 감지를 사용한다. 다른 앱 아이콘/바로가기와 섞어도 잘못된 정보 버튼을 차단하지 않는지 본다.
+4. 런처 조기 감지가 없다면 `own-launcher-long-click`, `own-launcher-action` 스냅샷과
+   launcher click/long-click 이벤트 이력을 확인한다. action 스냅샷은 명시적으로 진단을
+   켜고 own-icon 근거가 남아 있을 때만 메타데이터 일부를 메모리에 기록한다.
+5. 기기 관리자 목록 진입, OpenLock 외 관리자 상세, OpenLock의 등록/해제에서 PIN을
+   확인한다. 인증 후 등록/해제가 가능하고 PIN 뒤로가기 취소가 루프 없이 동작해야 한다.
+6. 특별한 접근, System Service, 삭제 보호, 화면 끄기/켜기, 일반 앱 및 휴대폰 전체
+   스케줄 잠금을 회귀 검증한다. Xiaomi/Huawei에서는 기존 화면 감지의 유지 여부를 별도로 본다.
 
-참고: [Android 접근성 오버레이 문서](https://developer.android.com/reference/android/view/WindowManager.LayoutParams#TYPE_ACCESSIBILITY_OVERLAY).
+`AppInfoEntryGuardTest`와 `DeviceAdminProtectionTest`를 추가하고 기존 기기 관리자 테스트를
+새 보호 범위에 맞췄다. 테스트는 합성 이벤트/트리이며 기기 호환성의 증거가 아니다.
+Java/Flutter가 없는 로컬에서는 실행할 수 없어 Actions에서 Kotlin 테스트와 APK 빌드를
+확인해야 한다. 이벤트 자체가 늦게 전달되는 경우의 지연은 남을 수 있다.
+
+참고: One UI Home 패키지는 [Samsung 문서](https://www.samsung.com/ae/b2b-faqs/samsung-knox/how-do-i-set-a-custom-launcher-with-the-navigation-bar-using-knox-configure/)에서 확인했다.
+이 문서는 최신 One UI의 정보 버튼 이벤트 형식을 보장하지 않는다. 이전 절의
+기기 관리자 목록 비차단 설명은 당시 구현에 대한 기록이며 현재 정책은 이 절이 우선한다.
+
+## guard-8 복귀 및 특별한 접근 클릭 감지
+
+설정 검사 전 로딩을 띄우던 guard-9 변경을 제거하고 `2905459`의 guard-8 흐름으로
+되돌렸다. 기존 PIN 취소 후 뒤로가기 로딩과 휴대폰 전체 잠금 스케줄은 유지한다.
+이번 진단 헤더는 **settings-guard-8-click**이다.
+
+- 실제 `TYPE_VIEW_CLICKED` 이벤트가 특별한 접근/권한 또는 알려진 하위 특수 권한
+  항목을 정확히 가리키면 상세 화면 구조를 기다리지 않고 기존 Settings PIN을 요청한다.
+  진단에는 `source=special-access-entry-click`로 기록한다.
+- 삼성 팝업 메뉴의 TextView와 일반 설정 항목의 컨테이너 클릭을 허용한다.
+  메뉴 팝업의 창 ID가 달라져도 현재 Settings에 있는 상태에서 온 정확한 클릭은
+  사용할 수 있다. 기존 System Service 클릭의 동일 창 검사는 유지한다.
+- 이벤트의 텍스트/설명/클래스만 사용하고 `event.source`나 root를 클릭 시점에
+  동기 조회하지 않는다. 현지화된 Settings 제목은 기존 작업 스레드가 읽어 둔
+  값을 사용한다. 이 값이 준비되지 않았다면 기본 한/영 등 제목을 사용한다.
+- EditText/SearchView/스위치/전체 ListView 등의 소스는 조기 감지에서 제외한다.
+  검색 화면과 알 수 없는 OEM/Compose 클릭도 기존 상세 화면 검사로 처리한다.
+  항목을 보기만 하거나 일부 문자열만 일치하는 경우에는 클릭 잠금을 요청하지 않는다.
+- 기존 접근성 상세/특별한 접근 하위 화면/자기 앱 정보/기기 관리자/삭제 보호와
+  150ms 재검사, PIN 인증 세션은 유지한다. 새로운 검사 로딩이나 3초 인증 전환은 없다.
+
+확인할 항목:
+
+1. 화면을 껐다 켜고 Settings → Apps → More 메뉴를 연다. 메뉴를 보기만 할 때는
+   PIN이 나오지 않고, 특별한 접근을 누르면 PIN이 나오는지 확인한다.
+2. 진단에서 `source=special-access-entry-click`가 기록되는지 확인한다.
+   기록이 없다면 기기가 클릭 이벤트에 정확한 항목 이름을 제공하는지 확인해야 한다.
+3. System Service, 앱 정보, 기기 관리자, 삭제 보호와 PIN 취소/인증이 유지되는지 본다.
+4. 일반 메뉴/앱 목록/검색 입력 및 스크롤에 새 로딩이나 불필요한 PIN이 없는지 본다.
+5. 직접 링크나 지원하지 않는 클릭 클래스로 들어갈 때 기존 상세 화면 감지가
+   유지되는지 확인하고, 삼성 확인 후 Xiaomi/HyperOS·Huawei/EMUI에서 별도로 검증한다.
+
+`SpecialAccessEntryClickTest`는 메뉴/행, 언어·현지화, 입력·목록·검색 제외와
+수동으로 메뉴를 보기만 하는 경우의 비차단을 검증한다. Java/Flutter가 없는 로컬에서는
+실행할 수 없어 Actions 빌드/테스트와 실제 기기 검증이 필요하다.
+클릭 이벤트 전달 자체가 늦거나 정보가 부족한 경우의 지연까지 해결했다고 보지 않는다.
+
+앱 정보에 대한 검토 결과: 우선 `com.android.settings:id/entity_header_title`을
+직접 조회해 OpenLock 이름/패키지를 확인하고, 실패하면 기존 트리 탐색으로 돌아가는
+방법이 후보이다. 다른 앱과 동일한 앱 정보 화면 클래스를 쓰므로 클래스만으로 잠그지
+않는다. 설정 앱 목록·검색·런처의 앱 정보 진입은 클릭 형태가 달라 별도 증거가 필요하다.
+헤더 우선 조회는 아직 적용하지 않았다. root/시스템 조회 자체가 늦으면 이 방법도
+기다릴 수 있으므로 실제 시간 비교가 필요하다.
+참고: [Android resource ID로 노드 조회](https://developer.android.com/reference/android/view/accessibility/AccessibilityNodeInfo#findAccessibilityNodeInfosByViewId(java.lang.String)).
 
 ## 재검사 연속성과 진단 누락: 여덟 번째 수정
 

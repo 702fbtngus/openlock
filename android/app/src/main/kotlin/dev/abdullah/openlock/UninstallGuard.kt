@@ -20,12 +20,12 @@ data class ScreenNode(
  * Decides whether the active window is an OS screen *about OpenLock itself*
  * that could remove it: its App info page (and sub-pages), its uninstall
  * confirmation, or the device-admin deactivation screen naming it. Also guards
- * its accessibility-service details and Special access (including other apps).
+ * its accessibility-service details, Special access and device-admin screens.
  *
  * Single-app screens are identified by what they show; generic activity names
  * alone cannot identify an app. The same Settings activities serve every app, and
  * lists that merely contain OpenLock's row (Apps list, Settings search
- * results, the device-admin list) must not match.
+ * results) must not match. Device-admin lists/details are intentionally protected.
  */
 object UninstallGuard {
 
@@ -42,12 +42,23 @@ object UninstallGuard {
     private const val DEVICE_ADMIN_ADD_CLASS = "deviceadminadd"
 
     private val PAGE_TITLE_IDS = setOf("action_bar_title", "toolbar_title", "collapsing_toolbar_title")
+    private val SETTINGS_ENTRY_CLICK_CLASSES = setOf(
+        "android.widget.LinearLayout", "android.widget.RelativeLayout", "android.widget.FrameLayout",
+        "android.view.ViewGroup", "android.widget.TextView",
+    )
     private val TOGGLE_IDS = setOf("switch_widget", "switch_bar", "switchbar", "switch_text", "main_switch_bar")
     private val DIRECTION_MARKS = Regex("[\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]")
     private val TITLE_WHITESPACE = Regex("[\\s\\u00a0\\u202f]+")
 
     // Exact screen names, not "accessibility"/"specialaccess" substrings:
-    // DeviceAdminSettings and generic ManageApplications must stay unguarded.
+    // Generic ManageApplications must stay unguarded.
+    private val DEVICE_ADMIN_SCREENS = setOf("deviceadminsettings", "deviceadminlist", "deviceadminadd")
+    private val DEVICE_ADMIN_TITLES = listOf(
+        "Device admin apps", "Device administrators", "기기 관리자 앱", "기기 관리자", "디바이스 관리자 앱", "设备管理应用",
+    )
+    private val APPS_LIST_TITLES = listOf("Apps", "Applications", "애플리케이션", "앱")
+    private val APP_ROW_IDS = setOf("app_name", "app_title", "title")
+    private val normalizedAppInfoActions = listOf("App info", "App information", "앱 정보", "정보").map(::normalizeText)
     private val ACCESSIBILITY_DETAILS = setOf(
         "toggleaccessibilityservicepreferencefragment", "accessibilityservicedetails",
     )
@@ -74,7 +85,7 @@ object UninstallGuard {
     // Fallback for generic SubSettings activities. Titles require the structural
     // checks below; plain preference rows/search results cannot trigger a lock.
     internal val specialAccessTitles = setOf(
-        "Special access", "Special app access", "특별한 접근", "특수 앱 액세스", "특별한 앱 액세스",
+        "Special access", "Special app access", "특별한 접근", "특별한 권한", "특수 앱 액세스", "특별한 앱 액세스",
         "Display over other apps", "Draw over other apps", "Appear on top",
         "다른 앱 위에 표시", "다른 앱 위에 그리기", "Alarms & reminders", "Alarms and reminders",
         "알람 및 리마인더", "알람 및 알림", "All files access", "모든 파일 접근", "모든 파일에 대한 접근",
@@ -100,6 +111,7 @@ object UninstallGuard {
     // Normalize fixed labels once, rather than running both regexes for every
     // candidate/label pair on the accessibility service's main thread.
     private val normalizedSpecialAccessTitles = specialAccessTitles.map(::normalizeText)
+    private val normalizedDeviceAdminTitles = DEVICE_ADMIN_TITLES.map(::normalizeText)
     private val normalizedSpecialAccessControls = SPECIAL_ACCESS_CONTROLS.map(::normalizeText)
     private val normalizedOnLabels = ON_LABELS.map(::normalizeText)
     private val normalizedOffActions = OFF_ACTIONS.map(::normalizeText)
@@ -124,6 +136,10 @@ object UninstallGuard {
     ): Boolean {
         if (isAboutOwnApp(windowPackage, windowClass, nodes, ownLabel, ownPackage)) return true
         if (windowPackage != SETTINGS_PACKAGE) return false
+        if (isDeviceAdminScreenClass(windowPackage, windowClass) || nodes.any { node ->
+                isExplicitPageTitle(node) && (matchesNormalizedText(node.text, normalizedDeviceAdminTitles) ||
+                    matchesNormalizedText(node.paneTitle, normalizedDeviceAdminTitles))
+            }) return true
         // A single-service pane/toolbar title already identifies the detail
         // page. Its switch and status can arrive in a later content event.
         if (nodes.any { isOwnServiceTitle(it, ownServiceLabel) }) return true
@@ -170,6 +186,36 @@ object UninstallGuard {
     fun isSpecialAccessScreenClass(windowPackage: String, windowClass: String?): Boolean =
         windowPackage == SETTINGS_PACKAGE && screenName(windowClass) in SPECIAL_ACCESS_SCREENS
 
+    fun isDeviceAdminScreenClass(windowPackage: String, windowClass: String?): Boolean =
+        windowPackage == SETTINGS_PACKAGE && screenName(windowClass) in DEVICE_ADMIN_SCREENS
+
+    private fun isExplicitPageTitle(node: ScreenNode): Boolean = !node.inList &&
+        (node.inToolbar || node.paneTitle != null || node.viewId?.substringAfter(":id/") in PAGE_TITLE_IDS)
+
+    /** Cached context for a later click, never a reason to lock a passive list. */
+    fun isOwnAppInAppsList(windowPackage: String, windowClass: String?, nodes: List<ScreenNode>,
+                         ownLabel: String, ownPackage: String): Boolean {
+        if (windowPackage != SETTINGS_PACKAGE || windowClass?.contains("search", ignoreCase = true) == true) return false
+        val appsPage = screenName(windowClass) == "manageapplications" || nodes.any { node ->
+            isExplicitPageTitle(node) && APPS_LIST_TITLES.any { title ->
+                sameText(node.text.orEmpty(), title) || sameText(node.paneTitle.orEmpty(), title)
+            }
+        }
+        return appsPage && nodes.none { it.viewId?.endsWith(":id/entity_header_title") == true } &&
+            nodes.any { node -> node.inList && node.clickable &&
+                node.viewId?.substringAfter(":id/") in APP_ROW_IDS &&
+                isOwnAppName(node.text, ownLabel, ownPackage) }
+    }
+
+    fun isOwnAppName(text: String?, ownLabel: String, ownPackage: String): Boolean =
+        text != null && (sameText(text, ownLabel) || sameText(text, ownPackage))
+
+    fun isAppInfoAction(text: String?): Boolean = matchesNormalizedText(text, normalizedAppInfoActions)
+
+    fun isSettingsEntryClickSource(source: ScreenNode, windowClass: String?): Boolean =
+        source.className in SETTINGS_ENTRY_CLICK_CLASSES && !source.checkable &&
+            windowClass?.contains("search", ignoreCase = true) != true
+
     fun isOwnServiceTitle(node: ScreenNode, serviceLabel: String): Boolean =
         !node.inList && (
             sameText(node.paneTitle.orEmpty(), serviceLabel) ||
@@ -186,6 +232,28 @@ object UninstallGuard {
     ): Boolean = windowPackage == SETTINGS_PACKAGE && !source.inList &&
         (sameText(source.text.orEmpty(), serviceLabel) ||
             eventTexts.any { sameText(it, serviceLabel) })
+
+    /** Call only for an actual TYPE_VIEW_CLICKED event. A menu TextView is a
+     *  valid entry, unlike a ListView carrying text from every menu item.
+     *  Unknown/Compose sources and search screens use the normal tree matcher. */
+    fun isSpecialAccessEntryClick(
+        windowPackage: String,
+        windowClass: String?,
+        source: ScreenNode,
+        eventTexts: List<String>,
+        localizedSpecialAccessTitles: Set<String> = emptySet(),
+    ): Boolean {
+        if (windowPackage != SETTINGS_PACKAGE || !isSettingsEntryClickSource(source, windowClass)) return false
+        val localized = normalizedLocalizedTitles(localizedSpecialAccessTitles)
+        return matchesNormalizedText(source.text, normalizedSpecialAccessTitles, localized) ||
+            eventTexts.any { matchesNormalizedText(it, normalizedSpecialAccessTitles, localized) }
+    }
+
+    fun isDeviceAdminEntryClick(windowPackage: String, windowClass: String?, source: ScreenNode,
+                               eventTexts: List<String>): Boolean = windowPackage == SETTINGS_PACKAGE &&
+        isSettingsEntryClickSource(source, windowClass) &&
+        (matchesNormalizedText(source.text, normalizedDeviceAdminTitles) ||
+            eventTexts.any { matchesNormalizedText(it, normalizedDeviceAdminTitles) })
 
     private fun screenName(windowClass: String?): String? =
         windowClass?.substringAfterLast('.')?.substringAfterLast('$')

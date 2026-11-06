@@ -149,8 +149,8 @@ class SettingsProtectionMatchingTest {
             assertTrue(screen, guarded(cls = "com.android.settings.$screen"))
         }
         assertFalse(guarded(cls = "com.android.settings.Settings\$ManageApplicationsActivity"))
-        assertFalse(guarded(cls = "com.android.settings.applications.specialaccess.deviceadmin.DeviceAdminSettings"))
-        assertFalse(guarded(cls = "com.android.settings.applications.specialaccess.deviceadmin.DeviceAdminAdd"))
+        assertTrue(guarded(cls = "com.android.settings.applications.specialaccess.deviceadmin.DeviceAdminSettings"))
+        assertTrue(guarded(cls = "com.android.settings.applications.specialaccess.deviceadmin.DeviceAdminAdd"))
     }
 
     @Test fun classMustBeExactAndInsideSettingsPackage() {

@@ -177,8 +177,8 @@ class UninstallGuardMatchingTest {
     }
 
     @Test
-    fun doesNotGuardOtherDeviceAdminsOrTheList() {
-        assertFalse(
+    fun guardsTheWholeDeviceAdminAreaRegardlessOfAppIdentity() {
+        assertTrue(
             about(
                 settings,
                 "com.android.settings.DeviceAdminAdd",
@@ -188,13 +188,12 @@ class UninstallGuardMatchingTest {
                 "com.android.settings:id/action_button" to "Deactivate this device admin app",
             ),
         )
-        // The device-admin list shows OpenLock as one row among others.
-        assertFalse(
+        // The entire list is now protected, even without an OpenLock row.
+        assertTrue(
             about(
                 settings,
                 "com.android.settings.Settings\$DeviceAdminSettingsActivity",
                 "android:id/title" to "Find My Device",
-                "android:id/title" to "OpenLock",
             ),
         )
     }
