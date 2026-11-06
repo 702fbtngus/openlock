@@ -199,6 +199,7 @@ class DetailRow extends StatelessWidget {
     this.leading,
     this.trailing,
     this.onTap,
+    this.detailAction,
     super.key,
   });
 
@@ -207,6 +208,7 @@ class DetailRow extends StatelessWidget {
   final Widget? leading;
   final Widget? trailing;
   final VoidCallback? onTap;
+  final Widget? detailAction;
 
   @override
   Widget build(BuildContext context) {
@@ -245,6 +247,7 @@ class DetailRow extends StatelessWidget {
                         color: c.textSecondary,
                       ),
                     ),
+                    if (detailAction != null) detailAction!,
                   ],
                 ),
               ),

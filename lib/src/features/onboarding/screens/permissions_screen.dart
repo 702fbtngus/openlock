@@ -1,6 +1,7 @@
 import 'package:core_theme/core_theme.dart';
 import 'package:core_ui/core_ui.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:openlock/src/core/interfaces/enforcement_bridge.dart';
@@ -45,17 +46,19 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Allow restricted settings'),
-        content: const Text(
-          'Android may restrict sensitive permissions for apps installed from '
-          'an APK. Allow restricted settings before activating device '
-          'administrator access if Android asks you to.\n\n'
-          '1. On the App info screen, tap the three-dot menu in the top right.\n'
-          '2. Tap "Allow restricted settings" and confirm with your device '
-          'PIN or fingerprint.\n'
-          '3. Return to OpenLock and grant Device administrator.\n\n'
-          'If this option is missing or already allowed, continue with Device '
-          'administrator. The menu varies by device. Android does not let '
-          'OpenLock verify this step automatically.',
+        content: const SingleChildScrollView(
+          child: Text(
+            '1. Tap Grant for Device administrator first.\n'
+            '2. If Android shows a restricted settings warning, acknowledge it, '
+            'then open OpenLock\'s App info.\n'
+            '3. Tap the three-dot menu in the top right, choose '
+            '"Allow restricted settings", and confirm with your device '
+            'PIN or fingerprint.\n'
+            '4. Return to OpenLock and tap Grant again.\n\n'
+            'The three-dot menu may appear only after Android has blocked an '
+            'activation attempt. If no restriction warning appears, complete '
+            'activation normally. Menu names vary by device.',
+          ),
         ),
         actions: [
           TextButton(
@@ -64,13 +67,25 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Got it'),
+            child: const Text('Open App info'),
           ),
         ],
       ),
     );
     if (!mounted || openAppInfo != true) return;
     await ref.read(permissionsControllerProvider.notifier).requestAppInfo();
+  }
+
+  Future<void> _requestDeviceAdmin() async {
+    try {
+      await ref.read(permissionsControllerProvider.notifier).requestDeviceAdmin();
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(error.message ?? 'Could not open device administrator setup.'),
+        action: SnackBarAction(label: 'Help', onPressed: _explainRestrictedSettings),
+      ));
+    }
   }
 
   @override
@@ -97,24 +112,21 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
             RowGroup(
               children: [
                 _PermissionTile(
-                  icon: Icons.app_settings_alt_rounded,
-                  title: 'Allow restricted settings',
-                  subtitle: states.restrictedSettingsAllowed == true
-                      ? 'This Android version does not require this step.'
-                      : 'If required, allow this in App info before granting '
-                          'Device administrator. Check manually in Settings.',
-                  granted: states.restrictedSettingsAllowed == true,
-                  required: false,
-                  onFix: _explainRestrictedSettings,
-                ),
-                _PermissionTile(
                   icon: Icons.admin_panel_settings_rounded,
                   title: 'Device administrator',
                   subtitle:
                       'Protects OpenLock from being uninstalled while active.',
                   granted: states.deviceAdmin,
                   required: false,
-                  onFix: controller.requestDeviceAdmin,
+                  onFix: _requestDeviceAdmin,
+                  detailAction: TextButton(
+                    onPressed: _explainRestrictedSettings,
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      alignment: Alignment.centerLeft,
+                    ),
+                    child: const Text('Blocked by restricted settings?'),
+                  ),
                 ),
                 _PermissionTile(
                   icon: Icons.query_stats_rounded,
@@ -213,6 +225,7 @@ class _PermissionTile extends StatelessWidget {
     required this.granted,
     required this.required,
     required this.onFix,
+    this.detailAction,
   });
 
   final IconData icon;
@@ -221,6 +234,7 @@ class _PermissionTile extends StatelessWidget {
   final bool granted;
   final bool required;
   final VoidCallback onFix;
+  final Widget? detailAction;
 
   @override
   Widget build(BuildContext context) {
@@ -229,6 +243,7 @@ class _PermissionTile extends StatelessWidget {
       leading: IconBadge(icon: icon, color: granted ? c.positive : null),
       title: title,
       detail: required ? 'Required. $subtitle' : subtitle,
+      detailAction: detailAction,
       trailing: granted
           ? Icon(Icons.check_circle_rounded, color: c.positive)
           : TextButton(onPressed: onFix, child: const Text('Grant')),

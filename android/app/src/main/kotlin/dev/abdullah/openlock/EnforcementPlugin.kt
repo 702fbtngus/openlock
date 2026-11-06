@@ -159,8 +159,15 @@ class EnforcementPlugin(private val activity: Activity) :
             }
             "isDeviceAdminActive" -> result.success(isDeviceAdminActive())
             "requestDeviceAdmin" -> {
-                requestDeviceAdmin()
-                result.success(null)
+                runCatching { requestDeviceAdmin() }
+                    .onSuccess { result.success(null) }
+                    .onFailure {
+                        Log.w(TAG, "Device administrator setup could not be opened", it)
+                        result.error("device_admin_launch_failed",
+                            "Android could not open device administrator setup. " +
+                                "If access is restricted, use the restricted settings help and try again.",
+                            it.javaClass.simpleName)
+                    }
             }
             "deactivateDeviceAdmin" -> {
                 deactivateDeviceAdmin()
@@ -424,7 +431,9 @@ class EnforcementPlugin(private val activity: Activity) :
                     "manages, locks, or wipes your device.",
             )
         }
-        launch(intent)
+        // DeviceAdminAdd explicitly rejects FLAG_ACTIVITY_NEW_TASK and finishes
+        // immediately. Launch from the current Activity, not the generic helper.
+        activity.startActivity(intent)
     }
 
     private fun deactivateDeviceAdmin() {

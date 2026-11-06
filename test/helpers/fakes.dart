@@ -127,6 +127,7 @@ final class FakeEnforcementBridge implements IEnforcementBridge {
   bool serviceRunning = false;
   bool deviceAdminActive = false;
   bool deviceAdminRequested = false;
+  Object? deviceAdminRequestError;
   bool appInfoRequested = false;
   bool deviceAdminDeactivated = false;
 
@@ -189,7 +190,11 @@ final class FakeEnforcementBridge implements IEnforcementBridge {
   Future<bool> isDeviceAdminActive() async => deviceAdminActive;
 
   @override
-  Future<void> requestDeviceAdmin() async => deviceAdminRequested = true;
+  Future<void> requestDeviceAdmin() async {
+    deviceAdminRequested = true;
+    final error = deviceAdminRequestError;
+    if (error != null) throw error;
+  }
 
   @override
   Future<void> deactivateDeviceAdmin() async {

@@ -111,6 +111,14 @@ class _ScheduleEditorScreenState extends ConsumerState<ScheduleEditorScreen> {
               onPressed: _delete,
               icon: const Icon(Icons.delete_outline),
             ),
+          Padding(
+            padding: const EdgeInsets.only(right: AppSpacing.sm),
+            child: FilledButton.icon(
+              onPressed: _save,
+              icon: const Icon(Icons.check_rounded),
+              label: const Text('Save'),
+            ),
+          ),
         ],
       ),
       body: SafeArea(
@@ -178,8 +186,6 @@ class _ScheduleEditorScreenState extends ConsumerState<ScheduleEditorScreen> {
                   ..sort((a, b) => a.labelKey.compareTo(b.labelKey));
                 final allSelected = sorted.isNotEmpty &&
                     sorted.every((app) => _packages.contains(app.packageName));
-                final anySelected =
-                    sorted.any((app) => _packages.contains(app.packageName));
                 void toggleAll() => setState(() {
                       if (allSelected) {
                         _packages.clear();
@@ -190,36 +196,43 @@ class _ScheduleEditorScreenState extends ConsumerState<ScheduleEditorScreen> {
                 void toggle(String pkg) => setState(() {
                       if (!_packages.add(pkg)) _packages.remove(pkg);
                     });
-                return RowGroup(
-                  separatorIndent: AppSpacing.md,
+                final colors = SuiteColors.of(context);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (sorted.isNotEmpty)
-                      AppListRow(
-                        dense: true,
-                        title: allSelected ? 'Deselect all' : 'Select all',
-                        onTap: toggleAll,
-                        trailing: Checkbox(
-                          tristate: true,
-                          value: allSelected ? true : (anySelected ? null : false),
-                          onChanged: (_) => toggleAll(),
+                    if (sorted.isNotEmpty) ...[
+                      FilledButton.icon(
+                        onPressed: toggleAll,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: colors.accentContainer,
+                          foregroundColor: colors.accent,
                         ),
+                        icon: Icon(allSelected
+                            ? Icons.deselect_rounded
+                            : Icons.select_all_rounded),
+                        label: Text(allSelected ? 'Deselect all' : 'Select all'),
                       ),
-                    for (final app in sorted)
-                      AppListRow(
-                        dense: true,
-                        title: app.label,
-                        onTap: () => toggle(app.packageName),
-                        trailing: Checkbox(
-                          value: _packages.contains(app.packageName),
-                          onChanged: (_) => toggle(app.packageName),
-                        ),
-                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                    ],
+                    RowGroup(
+                      separatorIndent: AppSpacing.md,
+                      children: [
+                        for (final app in sorted)
+                          AppListRow(
+                            dense: true,
+                            title: app.label,
+                            onTap: () => toggle(app.packageName),
+                            trailing: Checkbox(
+                              value: _packages.contains(app.packageName),
+                              onChanged: (_) => toggle(app.packageName),
+                            ),
+                          ),
+                      ],
+                    ),
                   ],
                 );
               },
             ),
-            const SizedBox(height: AppSpacing.lg),
-            VaultButton(label: 'Save schedule', onPressed: _save),
           ],
         ),
       ),

@@ -35,11 +35,16 @@ final class PermissionsController extends AsyncNotifier<PermissionStates> {
   Future<void> requestAppInfo() => _bridge.requestAppInfo();
 
   Future<void> requestDeviceAdmin() async {
-    await ref.read(configControllerProvider.future);
-    // Use the same enable/config-sync flow as the Settings screen. Resume
-    // refresh confirms activation or restores the flag after cancellation.
+    // Open Android first. Saving/enabling protection before activation can
+    // delay this request or cause the guard to cover its own activation page.
+    // Resume refresh syncs the config with Android's actual decision.
     _awaitingDeviceAdmin = true;
-    await ref.read(preventUninstallControllerProvider.notifier).requestEnable();
+    try {
+      await _bridge.requestDeviceAdmin();
+    } catch (_) {
+      _awaitingDeviceAdmin = false;
+      rethrow;
+    }
   }
   Future<void> requestOverlay() => _bridge.requestOverlayPermission();
   Future<void> requestBattery() => _bridge.requestBatteryExemption();

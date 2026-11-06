@@ -1,5 +1,6 @@
 import 'package:core_theme/core_theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openlock/src/core/di.dart';
@@ -50,7 +51,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Protection not active yet'), findsOneWidget);
-    expect(find.text('Allow restricted settings'), findsOneWidget);
+    expect(find.text('Allow restricted settings'), findsNothing);
+    expect(find.text('Blocked by restricted settings?'), findsOneWidget);
+    expect(find.byType(DetailRow), findsNWidgets(6));
     expect(find.text('Device administrator'), findsOneWidget);
     expect(find.text('Usage access'), findsOneWidget);
     expect(find.text('Display over other apps'), findsOneWidget);
@@ -81,26 +84,56 @@ void main() {
     ));
     await tester.pumpAndSettle();
     final row = find.ancestor(
-      of: find.text('Allow restricted settings'),
+      of: find.text('Device administrator'),
       matching: find.byType(DetailRow),
     );
-    final grant = find.descendant(of: row, matching: find.text('Grant'));
-    await tester.ensureVisible(grant);
-    await tester.tap(grant);
+    final help = find.descendant(
+      of: row, matching: find.text('Blocked by restricted settings?'));
+    await tester.ensureVisible(help);
+    await tester.tap(help);
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.textContaining('Tap Grant for Device administrator first.'), findsOneWidget);
     expect(bridge.appInfoRequested, isFalse);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(bridge.appInfoRequested, isFalse);
 
-    await tester.tap(grant);
+    await tester.tap(help);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Got it'));
+    await tester.tap(find.text('Open App info'));
     await tester.pumpAndSettle();
     expect(bridge.appInfoRequested, isTrue);
-    // Visiting App info is not evidence that Android granted anything.
-    expect(grant, findsOneWidget);
+    // Help opens only App info; it does not request or grant device admin.
+    expect(bridge.deviceAdminRequested, isFalse);
+    expect(find.descendant(of: row, matching: find.text('Grant')), findsOneWidget);
+  });
+
+  testWidgets('device admin launch failure shows feedback and help',
+      (tester) async {
+    final bridge = FakeEnforcementBridge()
+      ..deviceAdminRequestError = PlatformException(
+        code: 'device_admin_launch_failed',
+        message: 'Android could not open device administrator setup.',
+      );
+    // No config/storage overrides: launching must reach Android directly.
+    await tester.pumpWidget(_wrap(
+      const PermissionsScreen(),
+      overrides: [enforcementBridgeProvider.overrideWithValue(bridge)],
+    ));
+    await tester.pumpAndSettle();
+    final row = find.ancestor(
+      of: find.text('Device administrator'), matching: find.byType(DetailRow));
+    final grant = find.descendant(of: row, matching: find.text('Grant'));
+    await tester.ensureVisible(grant);
+    await tester.tap(grant);
+    await tester.pumpAndSettle();
+    expect(bridge.deviceAdminRequested, isTrue);
+    expect(find.text('Android could not open device administrator setup.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('Help'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
   });
 
   for (final activated in [false, true]) {
@@ -133,6 +166,10 @@ void main() {
       await tester.tap(grant);
       await tester.pumpAndSettle();
       expect(bridge.deviceAdminRequested, isTrue);
+      expect(
+        container.read(configControllerProvider).valueOrNull?.preventUninstall ?? false,
+        isFalse,
+      );
 
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
       bridge.deviceAdminActive = activated;
