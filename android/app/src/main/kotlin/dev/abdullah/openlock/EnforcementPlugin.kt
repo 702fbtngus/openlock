@@ -106,6 +106,7 @@ class EnforcementPlugin(private val activity: Activity) :
                 appendLine("Device ${Build.MANUFACTURER} ${Build.MODEL} Android ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}")
                 appendLine("Permissions: ${permissionStates()}")
                 appendLine("PIN configured=${store.pinHash() != null} preventUninstall=${store.preventUninstall()}")
+                appendLine(MonitorStartup.report(activity))
                 append(GuardDiagnostics.report())
             })
             "requestUsageAccess" -> {
@@ -148,8 +149,9 @@ class EnforcementPlugin(private val activity: Activity) :
             }
             "isServiceRunning" -> result.success(OpenLockMonitorService.isRunning)
             "startService" -> {
-                startService()
-                result.success(null)
+                runCatching { startService() }
+                    .onSuccess { result.success(null) }
+                    .onFailure { result.error("monitor_start_failed", it.javaClass.simpleName, null) }
             }
             "stopService" -> {
                 stopService()
@@ -386,17 +388,14 @@ class EnforcementPlugin(private val activity: Activity) :
     // --- Service control ----------------------------------------------------
 
     private fun startService() {
-        val intent = Intent(activity, OpenLockMonitorService::class.java)
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                activity.startForegroundService(intent)
-            } else {
-                activity.startService(intent)
-            }
-        }
+        MonitorStartup.setEnabled(activity, true)
+        MonitorStartup.record(activity, "user requesting monitor start")
+        MonitorStartup.start(activity)
     }
 
     private fun stopService() {
+        MonitorStartup.setEnabled(activity, false)
+        MonitorStartup.record(activity, "user stopped protection")
         runCatching {
             activity.stopService(Intent(activity, OpenLockMonitorService::class.java))
         }

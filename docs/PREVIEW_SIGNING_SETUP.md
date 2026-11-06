@@ -65,6 +65,26 @@ GitHub Secrets만 유일한 백업으로 삼지 않는다. 등록 후 Secret 값
 다른 PC에서는 새 키를 생성하는 대신 이 폴더의 백업을 사용한다.
 별도의 실제 키 값/비밀번호는 이 문서나 코드에 포함하지 않았다.
 
+## Preview 인증서 검증 오류
+
+`APK certificate does not match the fixed signing key.`만으로는 실제 키 불일치인지,
+인증서 출력 형식을 읽지 못한 것인지 구분할 수 없다. 이전 workflow는
+`Signer #1` 형식 하나와 인증서 출력 한 줄만 허용했다.
+
+현재 검증 스크립트는 번호형·SDK 범위형·서명 방식별 라벨을 처리한다.
+동일 인증서가 여러 서명 방식에 반복 출력되어도 통과하지만, 하나라도 다른 앱 서명
+지문이면 실패한다. 서명 자체의 유효성 검사는 먼저 `apksigner verify`가 수행한다.
+지문 추출 실패와 실제 불일치를 구분하고, 로그에 도구 경로·버전과 예상/실제 공개
+인증서 SHA-256을 표시한다. 키나 비밀번호는 출력하지 않는다.
+
+이 오류를 해결하려고 고정 키를 재생성하거나 Secrets를 다른 키로 교체하지 않는다.
+수정된 workflow에서도 실패하면 검증 단계의 도구 버전과 지문 로그를 확인한다.
+
+검증기 회귀 테스트:
+`python -m unittest discover -s scripts -p test_verify_apk_certificate.py`
+
+출력 형식 참고: [AOSP apksigner 구현](https://android.googlesource.com/platform/tools/apksig/+/master/src/apksigner/java/com/android/apksigner/ApkSignerTool.java).
+
 ## 확인한 범위
 
 키 생성 및 OpenSSL 암호 확인, Secret 값의 Base64 왕복 복원, 누락/잘못된 값 거절,

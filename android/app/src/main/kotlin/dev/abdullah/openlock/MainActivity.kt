@@ -12,6 +12,11 @@ class MainActivity : FlutterFragmentActivity() {
 
     private var enforcementPlugin: EnforcementPlugin? = null
 
+    override fun onResume() {
+        super.onResume()
+        MonitorStartup.restoreAsync(this, "app_resumed")
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         enforcementPlugin = EnforcementPlugin(this).also {

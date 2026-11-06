@@ -124,6 +124,9 @@ object UninstallGuard {
     ): Boolean {
         if (isAboutOwnApp(windowPackage, windowClass, nodes, ownLabel, ownPackage)) return true
         if (windowPackage != SETTINGS_PACKAGE) return false
+        // A single-service pane/toolbar title already identifies the detail
+        // page. Its switch and status can arrive in a later content event.
+        if (nodes.any { isOwnServiceTitle(it, ownServiceLabel) }) return true
         // A distinctive activity/fragment name is useful even before its text
         // loads. Generic host activities are deliberately absent from the set.
         if (isSpecialAccessScreenClass(windowPackage, windowClass)) return true
@@ -148,8 +151,8 @@ object UninstallGuard {
                 "$ownPackage/$ownPackage.OpenLockGuardAccessibilityService") }
         if (serviceDialog) return true
 
-        // A service name in the installed-services list is insufficient. Require
-        // a single-service toolbar plus controls, or a specific detail class.
+        // Generic text headers still need controls or a specific detail class.
+        // The explicit toolbar/pane-title fast path above does not wait for them.
         val namesOurService = nodes.any { sameText(it.text.orEmpty(), ownServiceLabel) ||
             sameText(it.paneTitle.orEmpty(), ownServiceLabel) }
         if (!namesOurService) return false
@@ -166,6 +169,23 @@ object UninstallGuard {
     /** Only distinctive Settings classes qualify without a loaded node tree. */
     fun isSpecialAccessScreenClass(windowPackage: String, windowClass: String?): Boolean =
         windowPackage == SETTINGS_PACKAGE && screenName(windowClass) in SPECIAL_ACCESS_SCREENS
+
+    fun isOwnServiceTitle(node: ScreenNode, serviceLabel: String): Boolean =
+        !node.inList && (
+            sameText(node.paneTitle.orEmpty(), serviceLabel) ||
+                ((node.inToolbar || node.viewId?.substringAfter(":id/") in PAGE_TITLE_IDS) &&
+                    sameText(node.text.orEmpty(), serviceLabel)))
+
+    /** A real click on our entry is an entry attempt, not a passive list scan.
+     *  The caller allows only non-input entry classes and validates the window. */
+    fun isOwnServiceEntryClick(
+        windowPackage: String,
+        source: ScreenNode,
+        eventTexts: List<String>,
+        serviceLabel: String,
+    ): Boolean = windowPackage == SETTINGS_PACKAGE && !source.inList &&
+        (sameText(source.text.orEmpty(), serviceLabel) ||
+            eventTexts.any { sameText(it, serviceLabel) })
 
     private fun screenName(windowClass: String?): String? =
         windowClass?.substringAfterLast('.')?.substringAfterLast('$')

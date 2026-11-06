@@ -56,6 +56,8 @@ class OpenLockMonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // Promote before potentially slow Keystore/config initialization.
+        startForeground(NOTIFICATION_ID, buildNotification())
         store = ConfigStore.get(this)
         usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
@@ -75,7 +77,13 @@ class OpenLockMonitorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (MonitorStartup.enabled(this) == false) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         startForeground(NOTIFICATION_ID, buildNotification())
+        MonitorStartup.setEnabled(this, true)
+        MonitorStartup.record(this, "monitor running")
         isRunning = true
         handler.removeCallbacks(poller)
         handler.post(poller)
@@ -84,6 +92,7 @@ class OpenLockMonitorService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        MonitorStartup.record(this, "monitor destroyed")
         GuardedScreen.onDetected = null
         GuardedScreen.onBackFinished = null
         handler.removeCallbacks(poller)

@@ -4,7 +4,7 @@ import android.os.SystemClock
 
 /** Explicitly started, bounded, in-memory capture. No disk or network writes. */
 object GuardDiagnostics {
-    const val REVISION = "settings-guard-4"
+    const val REVISION = "settings-guard-5"
     private const val CAPTURE_MS = 10 * 60 * 1_000L
     private const val MAX_SNAPSHOTS = 8
     private var until = 0L
@@ -12,7 +12,7 @@ object GuardDiagnostics {
     private var lastEvent = "No accessibility event captured."
     private var enforcement = "No guarded screen submitted to the monitor."
     private var lastLaunch = "No lock activity launch recorded."
-    private data class Scan(val pkg: String, val startedAt: Long, val matchedAt: Long)
+    private data class Scan(val pkg: String, val queuedAt: Long, val startedAt: Long, val matchedAt: Long)
     private data class PendingLock(val pkg: String, val requestedAt: Long, val scan: Scan?)
     private var latestScan: Scan? = null
     private var pendingLock: PendingLock? = null
@@ -45,8 +45,8 @@ object GuardDiagnostics {
         if (isCapturing()) lastLaunch = summary
     }
 
-    fun scan(pkg: String, startedAt: Long, matchedAt: Long, guarded: Boolean) {
-        if (isCapturing() && guarded) latestScan = Scan(pkg, startedAt, matchedAt)
+    fun scan(pkg: String, startedAt: Long, matchedAt: Long, guarded: Boolean, queuedAt: Long = startedAt) {
+        if (isCapturing() && guarded) latestScan = Scan(pkg, queuedAt, startedAt, matchedAt)
     }
 
     fun lockRequested(pkg: String) {
@@ -62,6 +62,7 @@ object GuardDiagnostics {
         val now = SystemClock.elapsedRealtime()
         latency = buildString {
             pending.scan?.let {
+                append("queueWaitMs=${it.startedAt - it.queuedAt} ")
                 append("inspectToMatchMs=${it.matchedAt - it.startedAt} ")
                 append("matchToRequestMs=${pending.requestedAt - it.matchedAt} ")
             }

@@ -176,12 +176,34 @@ class _ScheduleEditorScreenState extends ConsumerState<ScheduleEditorScreen> {
               data: (apps) {
                 final sorted = [...apps]
                   ..sort((a, b) => a.labelKey.compareTo(b.labelKey));
+                final allSelected = sorted.isNotEmpty &&
+                    sorted.every((app) => _packages.contains(app.packageName));
+                final anySelected =
+                    sorted.any((app) => _packages.contains(app.packageName));
+                void toggleAll() => setState(() {
+                      if (allSelected) {
+                        _packages.clear();
+                      } else {
+                        _packages.addAll(sorted.map((app) => app.packageName));
+                      }
+                    });
                 void toggle(String pkg) => setState(() {
                       if (!_packages.add(pkg)) _packages.remove(pkg);
                     });
                 return RowGroup(
                   separatorIndent: AppSpacing.md,
                   children: [
+                    if (sorted.isNotEmpty)
+                      AppListRow(
+                        dense: true,
+                        title: allSelected ? 'Deselect all' : 'Select all',
+                        onTap: toggleAll,
+                        trailing: Checkbox(
+                          tristate: true,
+                          value: allSelected ? true : (anySelected ? null : false),
+                          onChanged: (_) => toggleAll(),
+                        ),
+                      ),
                     for (final app in sorted)
                       AppListRow(
                         dense: true,

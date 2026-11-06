@@ -25,6 +25,9 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Test signing certificate verification
+        run: python3 -m unittest discover -s scripts -p test_verify_apk_certificate.py
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -80,19 +83,12 @@ jobs:
             echo "::error::apksigner was not found."
             exit 1
           fi
+          echo "Using apksigner: $APKSIGNER"
+          "$APKSIGNER" version
           "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk > "$RUNNER_TEMP/openlock-apk-cert.txt"
-          python3 - <<'PY'
-          import hashlib, os, pathlib, re
-          directory = pathlib.Path(os.environ['RUNNER_TEMP'])
-          expected = hashlib.sha256((directory / 'openlock-signing-cert.der').read_bytes()).hexdigest()
-          report = (directory / 'openlock-apk-cert.txt').read_text()
-          actual = re.findall(r'Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)', report)
-          if [value.lower() for value in actual] != [expected]:
-              raise SystemExit('APK certificate does not match the fixed signing key.')
-          print('Fixed APK certificate verified. SHA-256:', expected)
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
-              summary.write(f'Fixed APK signing certificate SHA-256: `{expected}`\n')
-          PY
+          python3 scripts/verify_apk_certificate.py \
+            --certificate "$RUNNER_TEMP/openlock-signing-cert.der" \
+            --report "$RUNNER_TEMP/openlock-apk-cert.txt"
 
       - name: Upload APK
         if: github.event_name != 'pull_request'

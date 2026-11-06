@@ -66,7 +66,7 @@ class SettingsProtectionMatchingTest {
         assertFalse(guarded(title("Special app access history")))
         assertTrue(guarded(title(service), row("\u200eIN\nUSE"),
             ScreenNode(null, "\u200fTURN\u00a0OFF", clickable = true)))
-        assertFalse(guarded(title(service), row("IN USE"),
+        assertFalse(guarded(ScreenNode(null, service, className = "android.widget.TextView"), row("IN USE"),
             ScreenNode(null, "TURN OFF shortcut", clickable = true)))
         val header = ScreenNode("com.android.settings:id/entity_header_title", "Chrome")
         assertTrue(guarded(header, toggle(), row("\u200eALLOW\nUSAGE\u00a0ACCESS")))
@@ -95,12 +95,35 @@ class SettingsProtectionMatchingTest {
         assertFalse(guarded(row("Stop $service?"), row("Stop")))
     }
 
-    @Test fun requiresControlsOrSpecificDetailClassAlongsideServiceIdentity() {
-        assertFalse(guarded(title(service)))
+    @Test fun explicitServiceTitleDoesNotWaitForControlsToLoad() {
+        assertTrue(guarded(title(service)))
+        assertTrue(guarded(title("System Service"), serviceLabel = "System Service"))
+        assertTrue(guarded(ScreenNode("android:id/action_bar_title", service)))
+        assertTrue(guarded(ScreenNode(null, null, paneTitle = service)))
+        assertFalse(guarded(ScreenNode(null, service, className = "android.widget.TextView")))
+        assertFalse(guarded(ScreenNode(null, service, heading = true, inList = true)))
+        assertFalse(guarded(ScreenNode("android:id/action_bar_title", service, inList = true)))
         assertFalse(guarded(title("Other service"), toggle(), row(service)))
         assertTrue(guarded(row(service), cls = "com.android.settings.accessibility.ToggleAccessibilityServicePreferenceFragment"))
         assertFalse(guarded(row("Other service"), cls = "com.android.settings.accessibility.ToggleAccessibilityServicePreferenceFragment"))
         assertFalse(guarded(toggle(), cls = "com.android.settings.accessibility.ToggleAccessibilityServicePreferenceFragment"))
+    }
+
+    @Test fun entryClickRequiresExactIdentityAndRejectsCollectionSources() {
+        val entry = ScreenNode("android:id/title", "System Service", clickable = true)
+        fun clicked(source: ScreenNode = entry, texts: List<String> = emptyList(),
+                    pkg: String = settings) = UninstallGuard.isOwnServiceEntryClick(
+            pkg, source, texts, "System Service")
+        assertTrue(clicked())
+        assertTrue(clicked(entry.copy(text = "\u200eSystem\nService\u200f")))
+        assertTrue(clicked(entry.copy(text = null), listOf("System Service", "On")))
+        assertFalse(clicked(entry.copy(text = "System Service shortcut")))
+        assertFalse(clicked(entry.copy(text = "Another service")))
+        assertFalse(clicked(entry.copy(inList = true), listOf("System Service")))
+        assertFalse(clicked(pkg = "com.android.chrome"))
+        // Passive list scans never use click evidence.
+        assertFalse(guarded(title("Installed apps"), row("System Service"), toggle(),
+            serviceLabel = "System Service"))
     }
 
     @Test fun specialAccessToolbarTitlesCoverTopLevelAndPermissionLists() {
@@ -174,7 +197,7 @@ class SettingsProtectionMatchingTest {
 
     @Test fun screenChangesDoNotInheritPreviousMatch() {
         assertFalse(guarded(cls = null))
-        assertFalse(guarded(title(service))) // Initial frame, controls not loaded.
+        assertTrue(guarded(title(service))) // Explicit title is enough before controls load.
         assertTrue(guarded(title(service), toggle())) // Later content event.
         assertFalse(guarded(title("Installed apps"), row(service), toggle()))
         assertTrue(guarded(title("Special access")))
