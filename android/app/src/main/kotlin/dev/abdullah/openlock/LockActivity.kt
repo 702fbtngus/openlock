@@ -197,7 +197,6 @@ class LockActivity : FragmentActivity() {
 
     private fun observeFirstDraw() {
         clearFirstDrawObserver()
-        if (!GuardDiagnostics.isCapturing()) return
         val target = lockedPackage
         val observer = window.decorView.viewTreeObserver
         val listener = object : ViewTreeObserver.OnDrawListener {
@@ -207,7 +206,14 @@ class LockActivity : FragmentActivity() {
                 recorded = true
                 GuardDiagnostics.lockDrawn(target, SystemClock.elapsedRealtime())
                 // Removing a listener during onDraw is forbidden by Android.
-                handler.post { if (firstDrawListener === this) clearFirstDrawObserver() }
+                handler.post {
+                    if (firstDrawListener === this) {
+                        if (!isFinishing && !isDestroyed && visiblePackage == target && lockedPackage == target) {
+                            GuardedScreen.onLockDrawn?.invoke(target)
+                        }
+                        clearFirstDrawObserver()
+                    }
+                }
             }
         }
         firstDrawObserver = observer

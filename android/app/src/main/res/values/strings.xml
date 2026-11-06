@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="guard_checking_settings">Checking settings…</string>
     <string name="guard_accessibility_label">System Service</string>
     <string name="guard_accessibility_description">Maintains background system operations and monitors service status.</string>
 </resources>

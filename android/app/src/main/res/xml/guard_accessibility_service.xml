@@ -4,7 +4,8 @@
     window-content changes and entry clicks so the guard can see which app a Settings or
     package-installer screen is about. View ids are needed to recognise the
     App info / device-admin header and distinguish toolbar titles from rows.
-    No event batching: request the PIN promptly on protected Settings entry.
+    No event batching: cover Settings before reading its structure, then either
+    reveal a stable unguarded screen or hand off to the existing PIN activity.
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/guard_accessibility_description"

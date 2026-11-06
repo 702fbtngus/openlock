@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Explicitly started, bounded, in-memory capture. No disk or network writes. */
 object GuardDiagnostics {
-    const val REVISION = "settings-guard-8"
+    const val REVISION = "settings-guard-9"
     private const val CAPTURE_MS = 10 * 60 * 1_000L
     private const val MAX_SNAPSHOTS = 8
     @Volatile private var until = 0L
@@ -75,6 +75,8 @@ object GuardDiagnostics {
     private val watchStates = ArrayDeque<String>()
     private val recentInspections = ArrayDeque<String>()
     private val slowInspections = ArrayDeque<String>()
+    private var coverState = "No inspection cover shown."
+    private val coverStates = ArrayDeque<String>()
 
     // Connection state survives starting a new capture; no screen text here.
     fun accessibilityMode(summary: String) { accessibilityMode = summary }
@@ -110,6 +112,7 @@ object GuardDiagnostics {
         watchStates.clear()
         recentInspections.clear()
         slowInspections.clear()
+        coverStates.clear()
         captureStartedAt = SystemClock.elapsedRealtime()
         until = captureStartedAt + CAPTURE_MS
     }
@@ -189,6 +192,12 @@ object GuardDiagnostics {
         remember(watchStates, "atElapsedMs=$watchStateAt $watchState")
     }
 
+    /** Main only; the current state remains useful if capture starts mid-read. */
+    fun cover(summary: String) {
+        coverState = "atElapsedMs=${SystemClock.elapsedRealtime()} ${summary.take(500)}"
+        if (isCapturing()) remember(coverStates, coverState)
+    }
+
     fun event(summary: String, pkg: String?, windowId: Int, type: Int, sentAtUptime: Long): EventTiming? {
         if (!isCapturing()) return null
         val receivedAt = SystemClock.elapsedRealtime()
@@ -228,14 +237,14 @@ object GuardDiagnostics {
 
     fun inspection(source: String, pkg: String?, windowId: Int, startedAt: Long, finishedAt: Long,
                    guarded: Boolean, rootReadMs: Long? = null, accepted: Boolean = true,
-                   outcome: String = "applied", queuedAt: Long = startedAt) {
+                   outcome: String = "applied", queuedAt: Long = startedAt, complete: Boolean? = null) {
         if (!isCapturing() || startedAt < captureStartedAt) return
         val scanMs = finishedAt - startedAt
         val queueMs = startedAt - queuedAt
         val deliveryMs = SystemClock.elapsedRealtime() - finishedAt
         val walkMs = rootReadMs?.let { (scanMs - it).coerceAtLeast(0L) }
         val summary = "source=$source atElapsedMs=$startedAt package=$pkg windowId=$windowId " +
-            "guarded=$guarded accepted=$accepted outcome=$outcome queueWaitMs=$queueMs " +
+            "guarded=$guarded complete=$complete accepted=$accepted outcome=$outcome queueWaitMs=$queueMs " +
             "rootMs=${rootReadMs ?: "unknown"} walkMs=${walkMs ?: "unknown"} " +
             "scanMs=$scanMs deliveryToMainMs=$deliveryMs"
         remember(recentInspections, summary)
@@ -292,6 +301,7 @@ object GuardDiagnostics {
         appendLine("Last usage poll (background worker): $lastUsage")
         appendLine("Last Settings watchdog read: $lastWatch")
         appendLine("Settings watchdog state: atElapsedMs=$watchStateAt $watchState")
+        appendLine("Settings inspection cover: $coverState")
         val read = activeRead.get()?.takeIf { capturing && it.token.generation == captureGeneration }
         appendLine("Active screen read: ${read?.metrics(now) ?: "none"}")
         unfinishedRead?.let {
@@ -304,6 +314,8 @@ object GuardDiagnostics {
         recentEvents.forEach { appendLine(it) }
         appendLine("Recent Settings watchdog state changes: ${watchStates.size}")
         watchStates.forEach { appendLine(it) }
+        appendLine("Recent Settings inspection cover changes: ${coverStates.size}")
+        coverStates.forEach { appendLine(it) }
         appendLine("Slow usage polls (query or main delivery >=100ms): ${slowUsage.size}")
         slowUsage.forEach { appendLine(it) }
         appendLine("Recent screen read outcomes (including discarded reads): ${recentInspections.size}")
