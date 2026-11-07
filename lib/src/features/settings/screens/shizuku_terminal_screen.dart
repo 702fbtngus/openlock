@@ -164,6 +164,9 @@ class _ShizukuTerminalScreenState extends ConsumerState<ShizukuTerminalScreen>
       }
     });
     if (follow) _scrollToEnd();
+    if (event.type == 'complete' && event.outcome == 'error') {
+      unawaited(_refresh());
+    }
   }
 
   Future<void> _run() async {

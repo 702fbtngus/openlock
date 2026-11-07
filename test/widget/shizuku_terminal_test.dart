@@ -107,6 +107,23 @@ void main() {
     expect(bridge.shellCommands, isEmpty);
   });
 
+  testWidgets('backend failure refreshes connection state', (tester) async {
+    final bridge = FakeEnforcementBridge();
+    await showTerminal(tester, bridge);
+    await tester.enterText(find.byType(TextField), 'id');
+    await tester.tap(find.byTooltip('Run command'));
+    await tester.pump();
+    bridge.shellStatus = const ShellStatus(connected: false);
+    bridge.terminalEvents.add(ShellEvent(
+        id: bridge.shellCommands.single.id,
+        type: 'complete',
+        outcome: 'error',
+        message: 'Server disconnected.'));
+    await tester.pumpAndSettle();
+    expect(find.text('Shizuku is offline'), findsOneWidget);
+    expect(find.text('Server disconnected.'), findsOneWidget);
+  });
+
   testWidgets('leaving the screen cancels the active command', (tester) async {
     final bridge = FakeEnforcementBridge();
     await showTerminal(tester, bridge);
