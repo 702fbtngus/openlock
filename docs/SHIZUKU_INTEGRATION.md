@@ -289,3 +289,46 @@ Wi-Fi loss, backend termination, screen off/on, app update, process loss, reboot
 with each Start on boot setting, and removed/re-created pairing. Repeat existing
 settings guards and scheduled locking during retries. Compilation and packaging
 checks do not establish device-specific startup behavior.
+
+## Experimental offline startup
+
+Fork revision `1d25e2f969e04c472f77ffa650103dc3c734498d` passed standalone
+compilation/unit tests and both generic consumers in Debug and optimized Release,
+including hotspot permission declarations and APK isolation checks.
+[Experimental offline startup build checks](https://github.com/702fbtngus/shizuku-embed/actions/runs/42383633271).
+
+Open the embedded manager Settings > Startup and enable **Experimental startup
+without Wi-Fi**. The option is off by default. Its explanation requests consent
+before asking for Nearby devices on Android 13+ or precise Location on Android
+11–12. Existing ADB pairing and WRITE_SECURE_SETTINGS are required. Older Android
+versions may also require location services to be on.
+
+When existing ADB endpoints fail and no Wi-Fi network is connected, this option
+requests a temporary local-only hotspot, then asks Android to enable wireless
+debugging when the system turns it off. It searches the live TLS port and local
+mDNS announcements. Hotspot preparation has a 12-second timeout. Discovery has
+a 120-second window with bounded connection timeouts. Android or manufacturer
+policy can refuse this process, including on Android 17.
+
+Use **Start / restart Shizuku** for a manual test with Wi-Fi disconnected. Select
+**Enable TCP on start** to retain a reusable TCP endpoint if startup succeeds.
+For a reboot test, also enable **Start on boot**, reboot with Wi-Fi disconnected
+and unlock once. The first unlock triggers a fresh recovery attempt.
+
+Failed automatic experiments wait at least five minutes and stop after three
+failures. A manual start, new boot or successful start resets this limit.
+Ordinary Wi-Fi recovery remains available after the experimental limit. Stop,
+option disable and cancellation release the experiment's hotspot reservation.
+A late reservation callback closes its resource immediately. The temporary
+hotspot can affect Wi-Fi/hotspot operation during the attempt.
+
+**Offline startup diagnostics** displays and copies the last attempt, including
+device/API, elapsed time, hotspot refusal, wireless-setting write count and ADB
+connection failure. The bounded local report excludes Wi-Fi credentials and
+pairing keys. The key-object debug log in the reused manager source was removed.
+
+Verify permission denial/revocation, Wi-Fi off manual start and reboot after first
+unlock, hotspot refusal/timeout, Stop/Back/option disable during startup, the
+failed-attempt limit, Wi-Fi reconnection and actual terminal `id` output. Repeat
+the existing guard and scheduled-lock tests while an attempt runs. Samsung and
+Xiaomi behavior requires separate physical-device verification.

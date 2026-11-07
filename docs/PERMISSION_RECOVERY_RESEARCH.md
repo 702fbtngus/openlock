@@ -274,5 +274,17 @@ OpenLock 자체가 시스템 앱·root 앱으로 바뀌지는 않는다.
 
 이 조사의 후속 작업으로 원본 Shizuku 관리 화면과 서버를 내장하는 모듈 및
 Settings 진입 메뉴를 구현했다. 단계별 빌드·검증 상태는 [통합 안내](SHIZUKU_INTEGRATION.md)에
-기록한다. 추가 권한 자동 복구는 아직 연결하지 않았으며, 현재 구현된 자동 복구는
-[접근성 복구](ACCESSIBILITY_RECOVERY.md)다.
+기록한다. 권한 복구는 [접근성 복구](ACCESSIBILITY_RECOVERY.md)를 제공한다.
+내장 Shizuku 서버에는 TCP 재시작, 부팅 재시도와 워치독을 연결했다.
+
+실험적 오프라인 시작 옵션은 사용 가능한 ADB 연결과 Wi-Fi 연결이 없을 때 임시
+로컬 전용 핫스팟을 요청하고, Android가 무선 디버깅을 끄면 제한된 시간 동안
+다시 활성화를 요청한다. 기본 비활성 상태이며 Android 11 이상, 기존 페어링,
+WRITE_SECURE_SETTINGS와 핫스팟용 런타임 권한이 필요하다. 부팅 후 첫 잠금 해제
+시점에 재시도를 요청한다. 실패한 자동 실험에는 5분 대기와 3회 제한을 적용하고,
+수동 시작으로 다시 시도할 수 있다. 시도 결과는 내장 Shizuku의 Startup에 있는
+Offline startup diagnostics에서 확인하고 복사한다.
+
+이 옵션의 실제 오프라인 시작 및 재부팅 복구 성공 여부는 Samsung과 Xiaomi에서
+각각 확인해야 한다. 핫스팟 요청과 무선 디버깅 활성화는 OS 및 제조사 정책의
+영향을 받는다. 설정 위치와 검증 절차는 [통합 안내](SHIZUKU_INTEGRATION.md)에 기록한다.
