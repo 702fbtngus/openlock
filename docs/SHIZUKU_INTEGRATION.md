@@ -239,3 +239,53 @@ build or the final Xiaomi device.
 See [the permission recovery research](PERMISSION_RECOVERY_RESEARCH.md) for the
 permission-specific mechanisms and limitations, and the fork's
 `EMBEDDING.md` for standalone build requirements.
+
+## Optional backend recovery
+
+Fork revision `560be79642079266540abf867a48521f92c77196` passed the standalone
+manager/unit tests and both generic consumers in Debug and optimized Release,
+including recovery components, process isolation and bundled license checks.
+[Startup recovery build checks](https://github.com/702fbtngus/shizuku-embed/actions/runs/42370471432).
+
+The embedded manager retains the original UI. The startup transport and recovery
+flow incorporates selected Shizuku Next ideas and ships its attribution. The
+nested API and OpenLock terminal protocol stay at their existing revisions.
+
+Open OpenLock Settings > Advanced > Shizuku, authenticate, then open the native
+manager Settings > Startup.
+
+1. Pair and start through the existing wireless-debugging flow. Confirm `id`
+   returns shell UID 2000 in the OpenLock terminal.
+2. Turn on **Enable TCP on start**. The default port is 5555. Change it to an
+   unused port if necessary. Use **Start / restart Shizuku** while wireless
+   debugging works. This enables authenticated ADB TCP before starting the server.
+3. Enable **Watchdog** to recover unexpected backend death. **Start on boot**
+   separately controls recovery after a reboot. **Recovery status** displays
+   waiting, running, intentional stop and authentication failures.
+4. Test with Wi-Fi and wireless debugging off during the same boot. Use the
+   native Stop menu to check intentional-stop handling, then Start / restart to
+   check offline recovery through the retained TCP endpoint.
+
+TCP and Watchdog default to off. A TCP listener may be reachable on connected
+networks and requires its ADB key. Turning off Enable TCP on start stops future
+activation. An existing listener remains until ADB restarts. A reboot may remove
+the endpoint, requiring first unlock and Wi-Fi/wireless debugging again.
+WRITE_SECURE_SETTINGS can request wireless debugging where the device permits it.
+
+Boot attempts wait and retry missing endpoints with bounded backoff. Watchdog
+uses a visible foreground service with a persisted 15-minute-minimum system job
+as a process-loss backstop. Android and OEM policy control actual scheduling.
+User Stop cancels pending starts and suspends recovery until a manual start,
+or a new boot with Start on boot enabled. Authentication failures and repeated
+starter failures pause automatic attempts until a manual retry.
+
+Recovery components run in `:shizuku`, separate from the existing guard process.
+Notification taps return through the OpenLock launcher. Existing PIN entry and
+manual terminal operations remain in their current host paths. This feature
+restores the backend. Automatic permission-restoration policy is a separate step.
+
+Validate Samsung and Xiaomi independently. Check a real shell response after
+Wi-Fi loss, backend termination, screen off/on, app update, process loss, reboot
+with each Start on boot setting, and removed/re-created pairing. Repeat existing
+settings guards and scheduled locking during retries. Compilation and packaging
+checks do not establish device-specific startup behavior.
