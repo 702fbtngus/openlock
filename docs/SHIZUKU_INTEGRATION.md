@@ -2,8 +2,8 @@
 
 ## Repository structure
 
-The Shizuku fork lives at <https://github.com/702fbtngus/openlock-shizuku>, on its
-`openlock-integration` branch. OpenLock includes it at `third_party/shizuku` as a
+The Shizuku fork lives at <https://github.com/702fbtngus/shizuku-embed>, on its
+`main` branch. OpenLock includes it at `third_party/shizuku` as a
 Git submodule. Shizuku's own `api` repository remains a nested submodule at the
 revision selected by upstream.
 
@@ -29,18 +29,18 @@ Activity. The fork is consumed as a Gradle composite build, with its own plugin
 and version-catalog configuration. All OpenLock APK workflows now check out
 recursive submodules and use Java 21, NDK 29 and CMake 3.31.
 
-Pushing code or workflow changes to the fork's `openlock-integration` branch
-starts **Shizuku standalone baseline** in Actions. The job compiles the original
+Pushing code or workflow changes to the fork's `main` branch
+starts **Shizuku Embed build checks** in Actions. The job compiles the original
 manager and server using `:manager:assembleDebug`. It does not need OpenLock
-signing secrets and uploads diagnostics rather than an APK. The fork's default
-branch remains upstream `master`; GitHub's manual-run UI requires the dispatch
-definition on the default branch, so use the integration branch's push trigger
-in this phase. Do not treat compilation as an installation or device test.
+signing secrets and uploads diagnostics rather than an APK. The generic fork
+uses `main` for development and keeps upstream `master` as
+the comparison point. Its default branch includes the workflow for manual runs.
+Device behavior requires testing in the actual host application.
 
 Verified on 2026-11-07: fork revision
 `7d14f543712182cf355450be087469fd860e2451` passed the standalone workflow,
 including recursive checkout, tool installation, `:manager:assembleDebug` and
-the APK-output check. [Successful Actions run](https://github.com/702fbtngus/openlock-shizuku/actions/runs/42339827503).
+the APK-output check. [Successful Actions run](https://github.com/702fbtngus/shizuku-embed/actions/runs/42339827503).
 The first run exposed the setup action's retired `tools` SDK-package default;
 the workflow now requests `platform-tools` explicitly. No original manager,
 pairing, starter or server application source was changed in this phase.
@@ -70,7 +70,7 @@ Phase 2 fork verification passed on 2026-11-07 at
 `82a574ae679f94d499ce8d675ec6d20c55950cdb`: the standalone manager, both
 composite host variants and the actual APK structure/native-payload checks all
 passed, including R8/resource shrinking for the composite Release host.
-[Successful phase 2 Actions run](https://github.com/702fbtngus/openlock-shizuku/actions/runs/42351363241).
+[Successful phase 2 Actions run](https://github.com/702fbtngus/shizuku-embed/actions/runs/42351363241).
 OpenLock's local Dart analysis (`--fatal-infos`, lib/test), 126 Flutter tests,
 127 Kotlin/JVM tests (`:app:testDebugUnitTest`) and the store-build-mode test
 also passed. The new PIN tests exposed premature
@@ -89,6 +89,40 @@ The local APK uses the local test signing identity. Preview Actions supplies the
 existing fixed signing identity after the parent changes are committed. Pairing
 and protection behavior still require Samsung/Xiaomi device checks. No physical
 device was connected or modified during these compiler/test checks.
+
+## Host-specific configuration
+
+The generic fork is named **Shizuku Embed**, at
+<https://github.com/702fbtngus/shizuku-embed>. Its source and example hosts use
+host-supplied identities. OpenLock's PIN gate, settings protection, schedules and
+permission-recovery policy stay in this repository.
+
+OpenLock consumes `dev.shizuku.embed:embedded:1.0` from the source composite.
+`android/gradle.properties` supplies the host identity across the composite
+boundary using system project properties.
+
+```properties
+systemProp.org.gradle.project.shizukuHostApplicationId=dev.abdullah.openlock
+systemProp.org.gradle.project.shizukuServerProcessName=openlock_shizuku_server
+systemProp.org.gradle.project.shizukuServerConfigName=openlock-shizuku.json
+```
+
+The two explicit backend overrides retain the process/configuration identity
+used by the first embedded OpenLock build. The permission prefix and provider
+authorities continue to derive from the OpenLock application ID. Other apps use
+the generic defaults or supply their own stable backend identifiers.
+
+The fork's build checks use two different example application IDs. Actual
+OpenLock Debug/Preview builds verify the consuming app's configuration and
+signing identity. See the fork's `EMBEDDING.md` for reusable build instructions.
+
+Generic fork revision `63cfe2e00d4b8054362d3458099f3062982aa58e` passed its
+standalone build, host-identity configuration tests and both example hosts'
+Debug/optimized Release APK inspections on 2026-11-07.
+[Generic fork build checks](https://github.com/702fbtngus/shizuku-embed/actions/runs/42354789957).
+The same system-project-property mechanism used by OpenLock also passed a
+local composite test against the real embedding script, including retained
+server process and configuration names.
 
 ## Clone and update
 
@@ -172,4 +206,4 @@ build or the final Xiaomi device.
 
 See [the permission recovery research](PERMISSION_RECOVERY_RESEARCH.md) for the
 permission-specific mechanisms and limitations, and the fork's
-`OPENLOCK_INTEGRATION.md` for standalone build requirements.
+`EMBEDDING.md` for standalone build requirements.

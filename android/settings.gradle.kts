@@ -26,5 +26,5 @@ plugins {
 include(":app")
 
 // The fork retains its own plugins, catalog and standalone build configuration.
-// Gradle substitutes dev.abdullah.openlock.shizuku:embedded with its library.
+// Gradle substitutes dev.shizuku.embed:embedded with its library.
 includeBuild("../third_party/shizuku")

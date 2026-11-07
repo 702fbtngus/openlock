@@ -1,4 +1,4 @@
 [submodule "shizuku"]
 	path = third_party/shizuku
-	url = https://github.com/702fbtngus/openlock-shizuku.git
-	branch = openlock-integration
+	url = https://github.com/702fbtngus/shizuku-embed.git
+	branch = main

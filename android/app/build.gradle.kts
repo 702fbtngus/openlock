@@ -91,7 +91,7 @@ flutter {
 }
 
 dependencies {
-    implementation("dev.abdullah.openlock.shizuku:embedded:1.0")
+    implementation("dev.shizuku.embed:embedded:1.0")
     // Supply hidden-API signatures to R8 without packaging Android's classes.
     compileOnly("dev.rikka.hidden:stub:4.4.0")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
