@@ -131,6 +131,9 @@ final class IntruderRecord {
 /// the whole Flutter app is testable with an in-memory fake — no platform
 /// channels in tests.
 abstract interface class IEnforcementBridge {
+  /// Opens the original native manager bundled in the OpenLock APK.
+  Future<void> openShizuku();
+
   /// Writes the enforcement subset of the config into the native
   /// EncryptedSharedPreferences the monitor service reads.
   Future<void> pushConfig(Map<String, dynamic> config);

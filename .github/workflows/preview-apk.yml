@@ -24,6 +24,9 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Test signing certificate verification
         run: python3 -m unittest discover -s scripts -p test_verify_apk_certificate.py
@@ -32,7 +35,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       # PR builds never receive the persistent signing identity.
       # A trusted preview must fail if secrets are missing, rather than silently
@@ -49,6 +52,16 @@ jobs:
           keytool -exportcert -keystore android/app/release.keystore \
             -storetype PKCS12 -alias "$KEY_ALIAS" -storepass:env KEYSTORE_PASSWORD \
             -file "$RUNNER_TEMP/openlock-signing-cert.der"
+
+      - name: Set up Android build tools for embedded Shizuku
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install embedded native toolchain
+        run: |
+          sdkmanager --install --channel=3 'platforms;android-36' 'build-tools;36.0.0' 'ndk;29.0.13113456' 'cmake;3.31.6'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2

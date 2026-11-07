@@ -19,23 +19,32 @@ if (keystorePropertiesFile.exists()) {
 android {
     namespace = "dev.abdullah.openlock"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "29.0.13113456"
 
     compileOptions {
         // Desugaring lets androidx.security / Tink use newer Java APIs on
         // older Android versions.
         isCoreLibraryDesugaringEnabled = true
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
+        jvmTarget = JavaVersion.VERSION_21.toString()
     }
 
     buildFeatures {
         // BuildConfig.DEBUG gates the native timing logs.
         buildConfig = true
+    }
+
+    // The upstream native starter is an executable .so. It must be extracted
+    // into nativeLibraryDir, where the ADB startup command can execute it.
+    packaging {
+        jniLibs.useLegacyPackaging = true
+        // Duplicate OSGi bundle metadata in the upstream crypto jars is not
+        // used by Android. Keep other resources and service metadata intact.
+        resources.excludes += "META-INF/versions/**/OSGI-INF/MANIFEST.MF"
     }
 
     defaultConfig {
@@ -82,6 +91,9 @@ flutter {
 }
 
 dependencies {
+    implementation("dev.abdullah.openlock.shizuku:embedded:1.0")
+    // Supply hidden-API signatures to R8 without packaging Android's classes.
+    compileOnly("dev.rikka.hidden:stub:4.4.0")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     // Encrypted config store the native monitor reads (EncryptedSharedPreferences).
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
@@ -94,4 +106,10 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // Real JSON parsing for schedule tests instead of Android's throwing stubs.
     testImplementation("org.json:json:20240303")
+}
+
+// Shizuku's original UI uses the Rikka AppCompat fork, which supplies the same
+// classes. Exclude the standard artifact across the host's dependency graph.
+configurations.configureEach {
+    exclude(group = "androidx.appcompat", module = "appcompat")
 }

@@ -11,7 +11,7 @@
     <!-- Draw the lock screen on top of other apps, and start it from the
          background (overlay permission exempts background-activity-start). -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
-    <!-- In-app update check (GitHub release lookup) — the only network use. -->
+    <!-- In-app updates and the embedded Shizuku's local ADB pairing. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Install the downloaded update APK (in-app update). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>

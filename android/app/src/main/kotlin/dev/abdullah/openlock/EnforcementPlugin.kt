@@ -96,6 +96,14 @@ class EnforcementPlugin(private val activity: Activity) :
                 replyFrom(appsExecutor, result) { appIcons(apps) }
             }
             "getPermissionStates" -> result.success(permissionStates())
+            "openShizuku" -> {
+                runCatching {
+                    activity.startActivity(Intent().setClassName(
+                        activity.packageName, "moe.shizuku.manager.MainActivity"))
+                }.onSuccess { result.success(null) }
+                    .onFailure { result.error("shizuku_launch_failed",
+                        "Could not open the embedded Shizuku manager.", it.javaClass.simpleName) }
+            }
             "setGuardDiagnosticsEnabled" -> {
                 if (call.argument<Boolean>("enabled") == true) GuardDiagnostics.start() else GuardDiagnostics.stop()
                 result.success(null)

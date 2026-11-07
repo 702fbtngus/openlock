@@ -63,6 +63,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   Future<bool> _authenticateForDisable() =>
       _reauthenticate('Enter your PIN to turn off uninstall protection.');
 
+  Future<void> _openShizuku() async {
+    if (!await _reauthenticate('Enter your PIN to manage Shizuku.')) return;
+    if (!mounted) return;
+    try {
+      await ref.read(enforcementBridgeProvider).openShizuku();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Could not open Shizuku. Please try again.')),
+      );
+    }
+  }
+
   Future<void> _setAccessibilityRecovery(bool enabled) async {
     if (enabled) {
       final permissions =
@@ -160,58 +174,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     return _promptPin(pinPrompt);
   }
 
-  Future<bool> _promptPin(String prompt) async {
-    final controller = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        var error = false;
-        return StatefulBuilder(
-          builder: (dialogContext, setDialogState) => AlertDialog(
-            title: const Text('Confirm your PIN'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(prompt),
-                const SizedBox(height: AppSpacing.md),
-                AppTextField(
-                  controller: controller,
-                  label: 'PIN',
-                  obscureText: true,
-                  autofocus: true,
-                  keyboardType: TextInputType.number,
-                  errorText: error ? 'Wrong PIN' : null,
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  final ok = await ref
-                      .read(pinAuthServiceProvider)
-                      .verifyPin(controller.text);
-                  if (ok) {
-                    if (dialogContext.mounted) {
-                      Navigator.pop(dialogContext, true);
-                    }
-                  } else {
-                    setDialogState(() => error = true);
-                  }
-                },
-                child: const Text('Confirm'),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-    controller.dispose();
-    return confirmed ?? false;
-  }
+  Future<bool> _promptPin(String prompt) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (_) => _PinConfirmationDialog(
+          prompt: prompt,
+          verifyPin: ref.read(pinAuthServiceProvider).verifyPin,
+        ),
+      ) ??
+      false;
 
   @override
   Widget build(BuildContext context) {
@@ -456,6 +427,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const SectionLead('Advanced'),
             RowGroup(
               children: [
+                SettingsTile(
+                  icon: Icons.developer_mode_outlined,
+                  title: 'Shizuku',
+                  subtitle: 'Manage the built-in Shizuku service',
+                  onTap: _openShizuku,
+                ),
                 toggle(
                   icon: Icons.warning_amber_outlined,
                   title: 'Decoy cover',
@@ -571,4 +548,83 @@ class _UpdateTilesState extends ConsumerState<_UpdateTiles> {
       ],
     );
   }
+}
+
+/// Owns its controller until the closing route animation actually unmounts it.
+class _PinConfirmationDialog extends StatefulWidget {
+  const _PinConfirmationDialog({required this.prompt, required this.verifyPin});
+
+  final String prompt;
+  final Future<bool> Function(String) verifyPin;
+
+  @override
+  State<_PinConfirmationDialog> createState() => _PinConfirmationDialogState();
+}
+
+class _PinConfirmationDialogState extends State<_PinConfirmationDialog> {
+  final _controller = TextEditingController();
+  String? _error;
+  bool _checking = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _confirm() async {
+    if (_checking) return;
+    setState(() {
+      _checking = true;
+      _error = null;
+    });
+    try {
+      final ok = await widget.verifyPin(_controller.text);
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+      if (ok) {
+        Navigator.pop(context, true);
+      } else {
+        setState(() {
+          _checking = false;
+          _error = 'Wrong PIN';
+        });
+      }
+    } catch (_) {
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+      setState(() {
+        _checking = false;
+        _error = 'Could not verify PIN. Please try again.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('Confirm your PIN'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(widget.prompt),
+            const SizedBox(height: AppSpacing.md),
+            AppTextField(
+              controller: _controller,
+              label: 'PIN',
+              obscureText: true,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              errorText: _error,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: _checking ? null : _confirm,
+            child: const Text('Confirm'),
+          ),
+        ],
+      );
 }

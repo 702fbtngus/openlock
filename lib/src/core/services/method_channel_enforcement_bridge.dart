@@ -11,6 +11,9 @@ final class MethodChannelEnforcementBridge implements IEnforcementBridge {
   static const MethodChannel _channel = MethodChannel('openlock/enforcement');
 
   @override
+  Future<void> openShizuku() => _channel.invokeMethod<void>('openShizuku');
+
+  @override
   Future<void> pushConfig(Map<String, dynamic> config) async {
     await _channel.invokeMethod<void>('pushConfig', {
       'config': jsonEncode(config),

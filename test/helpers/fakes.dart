@@ -92,6 +92,11 @@ final class FakeBiometricAuth implements IBiometricAuth {
 
 /// In-memory enforcement bridge capturing pushed configs.
 final class FakeEnforcementBridge implements IEnforcementBridge {
+  bool shizukuOpened = false;
+
+  @override
+  Future<void> openShizuku() async => shizukuOpened = true;
+
   FakeEnforcementBridge({this.apps = const [], PermissionStates? permissions})
       : permissions = permissions ??
             const PermissionStates(
