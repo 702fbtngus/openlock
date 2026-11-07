@@ -107,6 +107,7 @@ class EnforcementPlugin(private val activity: Activity) :
                 appendLine("Permissions: ${permissionStates()}")
                 appendLine("PIN configured=${store.pinHash() != null} preventUninstall=${store.preventUninstall()}")
                 appendLine(MonitorStartup.report(activity))
+                appendLine(AccessibilityRecovery.report())
                 append(GuardDiagnostics.report())
             })
             "requestUsageAccess" -> {
@@ -306,6 +307,7 @@ class EnforcementPlugin(private val activity: Activity) :
         "batteryExempt" to isBatteryExempt(),
         "serviceRunning" to OpenLockMonitorService.isRunning,
         "deviceAdmin" to isDeviceAdminActive(),
+        "writeSecureSettings" to AccessibilityRecovery.hasPermission(activity),
         // Android 13 introduced restricted settings. On newer Android versions,
         // its status is not available through a public API for ordinary apps.
         "restrictedSettingsAllowed" to if (Build.VERSION.SDK_INT < 33) true else null,
@@ -325,6 +327,7 @@ class EnforcementPlugin(private val activity: Activity) :
     /** Whether OpenLock's uninstall-guard accessibility service is enabled
      *  (required for the guard to recognise OpenLock's own screens). */
     private fun hasScreenGuardAccess(): Boolean {
+        if (Settings.Secure.getInt(activity.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0) != 1) return false
         val flat = Settings.Secure.getString(
             activity.contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,

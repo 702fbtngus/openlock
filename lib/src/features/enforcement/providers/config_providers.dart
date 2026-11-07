@@ -98,6 +98,11 @@ final class ConfigController extends AsyncNotifier<LockConfig> {
     await _apply(config.copyWith(preventUninstall: value));
   }
 
+  Future<void> setAutoRestoreAccessibility(bool value) async {
+    final config = state.valueOrNull ?? LockConfig.empty;
+    await _apply(config.copyWith(autoRestoreAccessibility: value));
+  }
+
   Future<void> upsertSchedule(LockSchedule schedule) async {
     final config = state.valueOrNull ?? LockConfig.empty;
     final schedules = List<LockSchedule>.of(config.schedules);

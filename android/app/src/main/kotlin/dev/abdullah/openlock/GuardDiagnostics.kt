@@ -8,14 +8,14 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Explicitly started, bounded, in-memory capture. No disk or network writes. */
 object GuardDiagnostics {
-    const val REVISION = "settings-guard-8-entry2"
+    const val REVISION = "settings-guard-8-entry3"
     private const val CAPTURE_MS = 10 * 60 * 1_000L
     private const val MAX_SNAPSHOTS = 8
     @Volatile private var until = 0L
     @Volatile private var captureGeneration = 0L
     private var captureStartedAt = 0L
     private val snapshots = LinkedHashMap<String, String>()
-    private var lastEvent = "No accessibility event captured."
+    @Volatile private var lastEvent = "No accessibility event captured."
     private var enforcement = "No guarded screen submitted to the monitor."
     private var lastLaunch = "No lock activity launch recorded."
     data class EventTiming(val sequence: Long, val pkg: String?, val windowId: Int,
@@ -26,7 +26,8 @@ object GuardDiagnostics {
                          val source: String, val queuedAt: Long, val startedAt: Long)
 
     internal data class ReadProgress(val token: ReadToken, val stage: String,
-                                    val stageAt: Long, val nodesRead: Int = 0) {
+                                    val stageAt: Long, val nodesRead: Int = 0,
+                                    val worker: Thread? = null) {
         fun metrics(now: Long): String = "read=#${token.id} request=${token.request} source=${token.source} " +
             "startedAtElapsedMs=${token.startedAt} ageMs=${now - token.startedAt} " +
             "queueWaitMs=${token.startedAt - token.queuedAt} stage=$stage " +
@@ -38,6 +39,8 @@ object GuardDiagnostics {
     private data class UnfinishedRead(val progress: ReadProgress, val stoppedAt: Long, val reason: String)
     // Written only on main. A stopped capture must retain a blocked read for the copied report.
     private var unfinishedRead: UnfinishedRead? = null
+    // Created only when capture starts; pure timing tests need no Android looper.
+    private var stallWatchdog: GuardStallWatchdog? = null
 
     /** Immutable provenance passed with the actual guard detection, not a
      *  "latest scan within 250 ms" guess which loses the slowest samples. */
@@ -70,8 +73,8 @@ object GuardDiagnostics {
     private var lastUsage = "No usage poll captured."
     private var accessibilityMode = "Accessibility service has not connected in this process."
     private var lastWatch = "No Settings watchdog read captured."
-    private var watchState = "No Settings watchdog state captured."
-    private var watchStateAt = 0L
+    @Volatile private var watchState = "No Settings watchdog state captured."
+    @Volatile private var watchStateAt = 0L
     private val watchStates = ArrayDeque<String>()
     private val recentInspections = ArrayDeque<String>()
     private val slowInspections = ArrayDeque<String>()
@@ -87,6 +90,7 @@ object GuardDiagnostics {
     fun isCapturing(): Boolean = until > SystemClock.elapsedRealtime()
 
     fun start() {
+        stallWatchdog?.stop("capture restarted")
         until = 0L
         captureGeneration++
         activeRead.set(null)
@@ -112,9 +116,18 @@ object GuardDiagnostics {
         slowInspections.clear()
         captureStartedAt = SystemClock.elapsedRealtime()
         until = captureStartedAt + CAPTURE_MS
+        stallWatchdog = GuardStallWatchdog(until) {
+            val progress = activeRead.get()?.takeIf { it.token.generation == captureGeneration }
+            GuardStallWatchdog.Context(buildString {
+                appendLine("Last accessibility callback: $lastEvent")
+                appendLine("Settings watchdog state: atElapsedMs=$watchStateAt $watchState")
+                append("Active screen read: ${progress?.metrics(SystemClock.elapsedRealtime()) ?: "none"}")
+            }, progress?.worker)
+        }.also { it.start() }
     }
 
     fun stop() {
+        stallWatchdog?.stop()
         val deadline = until
         until = 0L
         val now = SystemClock.elapsedRealtime()
@@ -145,7 +158,7 @@ object GuardDiagnostics {
         if (!isCapturing()) return null
         val token = ReadToken(generation, readSequence.incrementAndGet(), request, source,
             queuedAt, SystemClock.elapsedRealtime())
-        val progress = ReadProgress(token, "starting", token.startedAt)
+        val progress = ReadProgress(token, "starting", token.startedAt, worker = Thread.currentThread())
         if (generation != captureGeneration || !isCapturing()) return null
         activeRead.set(progress)
         // A capture can be restarted between the check and publication above.
@@ -161,7 +174,7 @@ object GuardDiagnostics {
             if (previous.token != token || token.generation != captureGeneration) return
             val now = SystemClock.elapsedRealtime()
             if (now >= until) return
-            val next = ReadProgress(token, stage, now, nodesRead)
+            val next = previous.copy(stage = stage, stageAt = now, nodesRead = nodesRead)
             if (activeRead.compareAndSet(previous, next)) {
                 if (token.generation != captureGeneration) activeRead.compareAndSet(next, null)
                 return
@@ -294,6 +307,7 @@ object GuardDiagnostics {
         appendLine("Last usage poll (background worker): $lastUsage")
         appendLine("Last Settings watchdog read: $lastWatch")
         appendLine("Settings watchdog state: atElapsedMs=$watchStateAt $watchState")
+        appendLine(stallWatchdog?.report() ?: "Main-thread stall sampler: not started")
         val read = activeRead.get()?.takeIf { capturing && it.token.generation == captureGeneration }
         appendLine("Active screen read: ${read?.metrics(now) ?: "none"}")
         unfinishedRead?.let {

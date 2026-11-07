@@ -87,6 +87,8 @@ class ConfigStore private constructor(context: Context) {
 
     fun preventUninstall(): Boolean = config?.optBoolean("preventUninstall", false) ?: false
 
+    fun autoRestoreAccessibility(): Boolean = config?.optBoolean("autoRestoreAccessibility", false) ?: false
+
     /** Global default for hiding locked apps' notification content. */
     fun hideNotifications(): Boolean = config?.optBoolean("hideNotifications", false) ?: false
 

@@ -61,6 +61,7 @@ final class MethodChannelEnforcementBridge implements IEnforcementBridge {
       batteryExempt: raw['batteryExempt'] == true,
       serviceRunning: raw['serviceRunning'] == true,
       deviceAdmin: raw['deviceAdmin'] == true,
+      writeSecureSettings: raw['writeSecureSettings'] == true,
       restrictedSettingsAllowed: raw['restrictedSettingsAllowed'] as bool?,
     );
   }

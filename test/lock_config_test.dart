@@ -17,6 +17,7 @@ void main() {
         intruderThreshold: 4,
         fakeCoverEnabled: true,
         preventUninstall: true,
+        autoRestoreAccessibility: true,
         hideNotifications: true,
         notificationOverrides: const {'com.game': false},
         schedules: [
@@ -44,6 +45,7 @@ void main() {
     expect(restored.intruderThreshold, 4);
     expect(restored.fakeCoverEnabled, isTrue);
     expect(restored.preventUninstall, isTrue);
+    expect(restored.autoRestoreAccessibility, isTrue);
     expect(restored.hideNotifications, isTrue);
     expect(restored.notificationOverrides, {'com.game': false});
     expect(restored.schedules.length, 1);
@@ -57,6 +59,7 @@ void main() {
     expect(config.relock.mode, RelockMode.immediately);
     expect(config.intruderThreshold, 3);
     expect(config.preventUninstall, isFalse);
+    expect(config.autoRestoreAccessibility, isFalse);
     expect(config.hideNotifications, isFalse);
     expect(config.notificationOverrides, isEmpty);
   });
@@ -98,6 +101,7 @@ void main() {
     expect(map['intruderThreshold'], 4);
     expect(map['fakeCoverEnabled'], true);
     expect(map['preventUninstall'], true);
+    expect(map['autoRestoreAccessibility'], true);
     expect(map['hideNotifications'], true);
     expect(map['notificationOverrides'], {'com.game': false});
     expect(map['biometricEnabled'], true);
@@ -113,6 +117,25 @@ void main() {
     final map = const LockConfig().toNativeMap(pinHash: 'H', pinSalt: 'S');
     expect(map['biometricEnabled'], false);
     expect(map['preventUninstall'], false);
+    expect(map['autoRestoreAccessibility'], false);
+  });
+
+  test('copying unrelated settings retains accessibility restore intent', () {
+    const config = LockConfig(autoRestoreAccessibility: true);
+    expect(config.copyWith(randomizeKeypad: true).autoRestoreAccessibility,
+        isTrue);
+    expect(
+      config.copyWith(autoRestoreAccessibility: false).autoRestoreAccessibility,
+      isFalse,
+    );
+    expect(const PermissionStates.unknown().writeSecureSettings, isFalse);
+    expect(
+      const PermissionStates.unknown()
+          .copyWith(writeSecureSettings: true)
+          .copyWith(deviceAdmin: true)
+          .writeSecureSettings,
+      isTrue,
+    );
   });
 
   test('IntruderRecord.fromMap round-trips the channel payload', () {

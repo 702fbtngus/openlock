@@ -15,6 +15,7 @@ final class LockConfig {
     this.intruderThreshold = 3,
     this.fakeCoverEnabled = false,
     this.preventUninstall = false,
+    this.autoRestoreAccessibility = false,
     this.hideNotifications = false,
     this.notificationOverrides = const {},
     this.schedules = const [],
@@ -43,6 +44,10 @@ final class LockConfig {
   /// active device administrator; also tells the native monitor to guard the
   /// OS deactivate-admin / app-info / uninstall screens.
   final bool preventUninstall;
+
+  /// Opt-in restoration of our accessibility service using an ADB-only grant.
+  /// Active only while the monitor and uninstall protection are enabled.
+  final bool autoRestoreAccessibility;
 
   /// Global default for hiding locked apps' notification content: the
   /// NotificationListenerService replaces each notification with a redacted
@@ -74,6 +79,7 @@ final class LockConfig {
     int? intruderThreshold,
     bool? fakeCoverEnabled,
     bool? preventUninstall,
+    bool? autoRestoreAccessibility,
     bool? hideNotifications,
     Map<String, bool>? notificationOverrides,
     List<LockSchedule>? schedules,
@@ -88,6 +94,8 @@ final class LockConfig {
         intruderThreshold: intruderThreshold ?? this.intruderThreshold,
         fakeCoverEnabled: fakeCoverEnabled ?? this.fakeCoverEnabled,
         preventUninstall: preventUninstall ?? this.preventUninstall,
+        autoRestoreAccessibility:
+            autoRestoreAccessibility ?? this.autoRestoreAccessibility,
         hideNotifications: hideNotifications ?? this.hideNotifications,
         notificationOverrides:
             notificationOverrides ?? this.notificationOverrides,
@@ -103,6 +111,7 @@ final class LockConfig {
         'intruderThreshold': intruderThreshold,
         'fakeCoverEnabled': fakeCoverEnabled,
         'preventUninstall': preventUninstall,
+        'autoRestoreAccessibility': autoRestoreAccessibility,
         'hideNotifications': hideNotifications,
         'notificationOverrides': notificationOverrides,
         'schedules': schedules.map((s) => s.toJson()).toList(),
@@ -122,6 +131,8 @@ final class LockConfig {
         intruderThreshold: (json['intruderThreshold'] as num?)?.toInt() ?? 3,
         fakeCoverEnabled: json['fakeCoverEnabled'] as bool? ?? false,
         preventUninstall: json['preventUninstall'] as bool? ?? false,
+        autoRestoreAccessibility:
+            json['autoRestoreAccessibility'] as bool? ?? false,
         hideNotifications: json['hideNotifications'] as bool? ?? false,
         notificationOverrides:
             ((json['notificationOverrides'] as Map<dynamic, dynamic>?) ??
@@ -149,6 +160,7 @@ final class LockConfig {
         'intruderThreshold': intruderThreshold,
         'fakeCoverEnabled': fakeCoverEnabled,
         'preventUninstall': preventUninstall,
+        'autoRestoreAccessibility': autoRestoreAccessibility,
         'hideNotifications': hideNotifications,
         'notificationOverrides': notificationOverrides,
         'biometricEnabled': biometricEnabled,

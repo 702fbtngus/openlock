@@ -63,6 +63,46 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   Future<bool> _authenticateForDisable() =>
       _reauthenticate('Enter your PIN to turn off uninstall protection.');
 
+  Future<void> _setAccessibilityRecovery(bool enabled) async {
+    if (enabled) {
+      final permissions =
+          await ref.read(enforcementBridgeProvider).getPermissionStates();
+      if (!mounted) return;
+      if (!permissions.writeSecureSettings) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('ADB permission required'),
+            content: const SelectableText(
+              'Connect your phone to a computer with USB debugging enabled, '
+              'then run:\n\n'
+              'adb shell pm grant dev.abdullah.openlock '
+              'android.permission.WRITE_SECURE_SETTINGS\n\n'
+              'Return here and enable automatic restore again.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Got it'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+    } else if (!await _reauthenticate(
+      'Enter your PIN to turn off automatic accessibility restore.',
+    )) {
+      return;
+    }
+    if (!mounted) return;
+    await ref
+        .read(configControllerProvider.notifier)
+        .setAutoRestoreAccessibility(enabled);
+    if (!mounted) return;
+    await ref.read(permissionsControllerProvider.notifier).refresh();
+  }
+
   /// Re-auth, confirm replacing any existing key, then show a new recovery
   /// key until the user confirms saving it.
   Future<void> _recoveryKey() async {
@@ -371,6 +411,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                         : () => ref
                             .read(permissionsControllerProvider.notifier)
                             .requestScreenGuardAccess(),
+                  ),
+                if (preventUninstall || config.autoRestoreAccessibility)
+                  toggle(
+                    icon: Icons.restore_outlined,
+                    title: 'Restore accessibility automatically',
+                    subtitle: config.autoRestoreAccessibility &&
+                            !(permissions?.writeSecureSettings ?? false)
+                        ? 'ADB permission missing; automatic restore is paused'
+                        : 'Restore the uninstall guard while protection and '
+                            'Prevent uninstall are on. Turn this off before '
+                            'disabling the service manually. Requires an ADB grant.',
+                    value: config.autoRestoreAccessibility,
+                    onChanged: _setAccessibilityRecovery,
                   ),
                 toggle(
                   icon: Icons.shuffle,

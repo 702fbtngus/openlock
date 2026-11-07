@@ -36,6 +36,7 @@ class OpenLockMonitorService : Service() {
     private val usageThread = HandlerThread("OpenLock-usage-poll").apply { start() }
     private val usageHandler = Handler(usageThread.looper)
     private val pollSession = ForegroundPollSession()
+    private var accessibilityRecovery: AccessibilityRecovery? = null
 
     private val leftAppAt = ConcurrentHashMap<String, Long>()
     @Volatile private var screenOffAt: Long = 0L
@@ -68,6 +69,7 @@ class OpenLockMonitorService : Service() {
                     lastPhoneLaunchAt = 0L
                 }
                 Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                    accessibilityRecovery?.requestCheck()
                     screenInteractive = true
                     // The last event may still name the keyguard. Do not let
                     // that stale SystemUI exemption suppress the wake-up PIN.
@@ -153,6 +155,7 @@ class OpenLockMonitorService : Service() {
                 lastLaunchAt = 0L
             }
         }
+        accessibilityRecovery = AccessibilityRecovery(this, store).also { it.start() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -172,6 +175,8 @@ class OpenLockMonitorService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        accessibilityRecovery?.stop()
+        accessibilityRecovery = null
         pollSession.stop()
         usageHandler.removeCallbacksAndMessages(null)
         usageThread.quitSafely()

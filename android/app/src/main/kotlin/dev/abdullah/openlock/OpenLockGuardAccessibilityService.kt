@@ -91,6 +91,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     }
 
     override fun onServiceConnected() {
+        isConnected = true
         super.onServiceConnected()
         // Framework cache handling runs BEFORE onAccessibilityEvent, and can
         // synchronously refresh a clicked node. It can also retain descendants
@@ -419,6 +420,7 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        isConnected = false
         GuardedScreen.windowChanged()
         destroyed = true
         appInfoEntry.clear()
@@ -437,6 +439,11 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         GuardDiagnostics.watch("stopped: destroy")
         GuardedScreen.clear()
         super.onDestroy()
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        isConnected = false
+        return super.onUnbind(intent)
     }
 
     private fun startBackNavigation(pkg: String): Boolean {
@@ -637,18 +644,20 @@ class OpenLockGuardAccessibilityService : AccessibilityService() {
         }
     }
 
-    private companion object {
-        const val TAG = "OpenLockGuard"
-        const val MAX_NODES = 600
-        const val MATCH_CHECK_INTERVAL = 8
-        const val SETTINGS_WATCH_MS = 150L
-        const val WATCH_SOURCE = "window-watchdog"
+    companion object {
+        @Volatile var isConnected = false
+            private set
+        private const val TAG = "OpenLockGuard"
+        private const val MAX_NODES = 600
+        private const val MATCH_CHECK_INTERVAL = 8
+        private const val SETTINGS_WATCH_MS = 150L
+        private const val WATCH_SOURCE = "window-watchdog"
         // Container rows only: a TextView may be a search/input field on OEM
         // builds. Unrecognised sources use the normal detail-title fallback.
-        val ENTRY_CLICK_CLASSES = setOf("android.widget.LinearLayout", "android.widget.RelativeLayout",
+        private val ENTRY_CLICK_CLASSES = setOf("android.widget.LinearLayout", "android.widget.RelativeLayout",
             "android.widget.FrameLayout", "android.view.ViewGroup")
-        val TOOLBAR_IDS = setOf("action_bar", "toolbar", "collapsing_toolbar", "action_bar_container")
-        val TITLE_RESOURCES = listOf(
+        private val TOOLBAR_IDS = setOf("action_bar", "toolbar", "collapsing_toolbar", "action_bar_container")
+        private val TITLE_RESOURCES = listOf(
             "special_access", "special_access_title", "special_access_settings_title",
             "overlay_settings", "draw_overlay", "alarms_and_reminders_title",
             "usage_access", "usage_access_title", "write_settings", "manage_external_storage_title",

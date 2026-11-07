@@ -4,6 +4,10 @@
          user under Settings → Special app access → Usage access). -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions"/>
+    <!-- Optional accessibility recovery. Granted explicitly over ADB, never a
+         runtime permission prompt. Used only after enabling auto-restore. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions"/>
     <!-- Draw the lock screen on top of other apps, and start it from the
          background (overlay permission exempts background-activity-start). -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>

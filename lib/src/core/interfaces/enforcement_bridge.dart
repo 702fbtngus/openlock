@@ -32,6 +32,7 @@ final class PermissionStates {
     required this.batteryExempt,
     required this.serviceRunning,
     this.deviceAdmin = false,
+    this.writeSecureSettings = false,
     this.restrictedSettingsAllowed,
   });
 
@@ -44,6 +45,7 @@ final class PermissionStates {
         batteryExempt = false,
         serviceRunning = false,
         deviceAdmin = false,
+        writeSecureSettings = false,
         restrictedSettingsAllowed = null;
 
   final bool usageAccess;
@@ -62,6 +64,7 @@ final class PermissionStates {
   final bool batteryExempt;
   final bool serviceRunning;
   final bool deviceAdmin;
+  final bool writeSecureSettings;
 
   /// Null when Android cannot report this status to an ordinary app. Opening
   /// App info alone must never be treated as granting restricted settings.
@@ -82,6 +85,7 @@ final class PermissionStates {
     bool? batteryExempt,
     bool? serviceRunning,
     bool? deviceAdmin,
+    bool? writeSecureSettings,
   }) =>
       PermissionStates(
         usageAccess: usageAccess ?? this.usageAccess,
@@ -92,6 +96,7 @@ final class PermissionStates {
         batteryExempt: batteryExempt ?? this.batteryExempt,
         serviceRunning: serviceRunning ?? this.serviceRunning,
         deviceAdmin: deviceAdmin ?? this.deviceAdmin,
+        writeSecureSettings: writeSecureSettings ?? this.writeSecureSettings,
         restrictedSettingsAllowed: restrictedSettingsAllowed,
       );
 }
