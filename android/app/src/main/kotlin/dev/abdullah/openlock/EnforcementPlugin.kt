@@ -51,14 +51,17 @@ class EnforcementPlugin(private val activity: Activity) :
 
     /** App list and icon rendering; independent requests, so two workers. */
     private val appsExecutor: ExecutorService = Executors.newFixedThreadPool(2)
+    private val terminal = ShizukuTerminal(activity.applicationContext)
 
     fun register(messenger: BinaryMessenger) {
+        terminal.register(messenger)
         channel = MethodChannel(messenger, CHANNEL).also {
             it.setMethodCallHandler(this)
         }
     }
 
     fun dispose() {
+        terminal.dispose()
         channel?.setMethodCallHandler(null)
         channel = null
         storeExecutor.shutdown()
@@ -96,6 +99,9 @@ class EnforcementPlugin(private val activity: Activity) :
                 replyFrom(appsExecutor, result) { appIcons(apps) }
             }
             "getPermissionStates" -> result.success(permissionStates())
+            "getShellStatus" -> terminal.status(result)
+            "startShellCommand" -> terminal.start(call.argument("id"), call.argument("command"), result)
+            "cancelShellCommand" -> terminal.stop(call.argument("id"), result)
             "openShizuku" -> {
                 runCatching {
                     activity.startActivity(Intent().setClassName(

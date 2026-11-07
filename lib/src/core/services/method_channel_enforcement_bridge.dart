@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 import 'package:openlock/src/core/interfaces/enforcement_bridge.dart';
+import 'package:openlock/src/core/interfaces/shell_terminal.dart';
 
 /// Production [IEnforcementBridge] backed by the `openlock/enforcement`
 /// MethodChannel. Native side lives in the Kotlin `EnforcementPlugin`.
@@ -12,6 +13,31 @@ final class MethodChannelEnforcementBridge implements IEnforcementBridge {
 
   @override
   Future<void> openShizuku() => _channel.invokeMethod<void>('openShizuku');
+
+  static final Stream<ShellEvent> _shellEvents =
+      const EventChannel('openlock/shizuku-terminal')
+          .receiveBroadcastStream()
+          .map((event) =>
+              ShellEvent.fromMap((event as Map).cast<Object?, Object?>()));
+
+  @override
+  Stream<ShellEvent> get shellEvents => _shellEvents;
+
+  @override
+  Future<ShellStatus> getShellStatus() async => ShellStatus.fromMap(
+        await _channel.invokeMapMethod<Object?, Object?>('getShellStatus') ??
+            {},
+      );
+
+  @override
+  Future<void> startShellCommand(
+          {required String id, required String command}) =>
+      _channel.invokeMethod<void>(
+          'startShellCommand', {'id': id, 'command': command});
+
+  @override
+  Future<void> cancelShellCommand(String id) =>
+      _channel.invokeMethod<void>('cancelShellCommand', {'id': id});
 
   @override
   Future<void> pushConfig(Map<String, dynamic> config) async {

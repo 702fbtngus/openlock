@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:openlock/src/core/di.dart';
 import 'package:openlock/src/features/enforcement/providers/config_providers.dart';
 import 'package:openlock/src/features/settings/screens/settings_screen.dart';
+import 'package:openlock/src/features/settings/screens/shizuku_terminal_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/fakes.dart';
@@ -20,10 +21,8 @@ class _NoUpdates implements IUpdateService {
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  Future<void> showSettings(
-    WidgetTester tester,
-    FakeEnforcementBridge bridge,
-  ) async {
+  Future<void> showSettings(WidgetTester tester, FakeEnforcementBridge bridge,
+      {String entry = 'Shizuku'}) async {
     final appearance = (await tester.runAsync(AppearanceController.load))!;
     final container = ProviderContainer(overrides: [
       appearanceProvider.overrideWithValue(appearance),
@@ -49,8 +48,8 @@ void main() {
       ),
     ));
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('Shizuku'), 400);
-    await tester.tap(find.text('Shizuku'));
+    await tester.scrollUntilVisible(find.text(entry), 400);
+    await tester.tap(find.text(entry));
     await tester.pumpAndSettle();
   }
 
@@ -85,5 +84,20 @@ void main() {
     await tester.enterText(find.byType(TextField), '135790');
     await confirmPin(tester);
     expect(bridge.shizukuOpened, isTrue);
+  });
+
+  testWidgets('terminal opens only after PIN confirmation', (tester) async {
+    final bridge = FakeEnforcementBridge();
+    await showSettings(tester, bridge, entry: 'Shizuku terminal');
+    expect(find.byType(ShizukuTerminalScreen), findsNothing);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ShizukuTerminalScreen), findsNothing);
+    await tester.tap(find.text('Shizuku terminal'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '135790');
+    await confirmPin(tester);
+    expect(find.byType(ShizukuTerminalScreen), findsOneWidget);
+    expect(bridge.shellCommands, isEmpty);
   });
 }

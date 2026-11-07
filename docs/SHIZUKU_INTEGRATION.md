@@ -174,6 +174,38 @@ OpenLock APK workflows.
 
 ## Real-device phase 2 checklist
 
+### Manual shell terminal
+
+Settings > Advanced > Shizuku terminal uses the embedded server through its
+host-UID-only Binder bridge. The host PIN/biometric gate applies on entry and
+after returning from the background. Backgrounding or leaving the terminal
+requests cancellation of the active command.
+
+Enter device-shell commands such as `id` or `pm list packages`. Each invocation
+runs `/system/bin/sh -c` in `/` with closed stdin. Shell pipelines and multiline
+scripts run within that invocation. Working-directory/environment changes last
+for that command. Interactive programs require a separate PTY implementation.
+
+The console streams stdout and stderr, shows the exit code and elapsed time,
+and provides copy/reuse/clear controls. Its current limits are 120 seconds per
+command, 65,536 output characters per command and 50 history entries per visit.
+Stop terminates the launched shell and closes its output pipes. Detached
+background jobs require their own termination. Commands/output are held in the
+current screen's memory.
+
+The bridge is supplied by fork revision
+`cea96cd47ee4de75f87c96263bf4e960ec1aa42e`, verified in the original standalone
+build and both example consumers' Debug/optimized Release builds.
+[Host bridge build checks](https://github.com/702fbtngus/shizuku-embed/actions/runs/42358101605).
+
+Device checks include starting the embedded server, running `id` to confirm the
+actual UID, separate stdout/stderr, a nonzero exit, a pipeline, stop/timeout,
+large output and split Korean/emoji output. Test server death/restart, leaving
+the screen, background/return authentication and existing protection guards.
+Keep automatic permission-recovery policy as a separate implementation step.
+
+### Manager and protection checks
+
 - Update using the existing OpenLock signing identity; verify no extra launcher
   icon or separately installed Shizuku package is added.
 - Open Settings > Advanced > Shizuku. Cancel/wrong PIN must not open the manager;

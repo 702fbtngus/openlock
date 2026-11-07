@@ -6,6 +6,7 @@ import 'package:openlock/src/core/clock.dart';
 import 'package:openlock/src/core/interfaces/biometric_auth.dart';
 import 'package:openlock/src/core/interfaces/config_file_store.dart';
 import 'package:openlock/src/core/interfaces/enforcement_bridge.dart';
+import 'package:openlock/src/core/interfaces/shell_terminal.dart';
 import 'package:openlock/src/core/interfaces/key_derivation.dart';
 
 /// In-memory secure storage.
@@ -96,6 +97,26 @@ final class FakeEnforcementBridge implements IEnforcementBridge {
 
   @override
   Future<void> openShizuku() async => shizukuOpened = true;
+
+  ShellStatus shellStatus = const ShellStatus(connected: true, uid: 2000);
+  final terminalEvents = StreamController<ShellEvent>.broadcast(sync: true);
+  final shellCommands = <({String id, String command})>[];
+  final cancelledCommands = <String>[];
+
+  @override
+  Stream<ShellEvent> get shellEvents => terminalEvents.stream;
+
+  @override
+  Future<ShellStatus> getShellStatus() async => shellStatus;
+
+  @override
+  Future<void> startShellCommand(
+      {required String id, required String command}) async {
+    shellCommands.add((id: id, command: command));
+  }
+
+  @override
+  Future<void> cancelShellCommand(String id) async => cancelledCommands.add(id);
 
   FakeEnforcementBridge({this.apps = const [], PermissionStates? permissions})
       : permissions = permissions ??

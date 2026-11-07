@@ -1,3 +1,5 @@
+import 'shell_terminal.dart';
+
 /// A launchable app installed on the device, as reported by the native
 /// PackageManager query. Metadata only: the icon is fetched separately, per
 /// visible row, through [IEnforcementBridge.getAppIcons].
@@ -133,6 +135,11 @@ final class IntruderRecord {
 abstract interface class IEnforcementBridge {
   /// Opens the original native manager bundled in the OpenLock APK.
   Future<void> openShizuku();
+
+  Future<ShellStatus> getShellStatus();
+  Stream<ShellEvent> get shellEvents;
+  Future<void> startShellCommand({required String id, required String command});
+  Future<void> cancelShellCommand(String id);
 
   /// Writes the enforcement subset of the config into the native
   /// EncryptedSharedPreferences the monitor service reads.

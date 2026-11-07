@@ -14,6 +14,7 @@ import 'package:openlock/src/features/enforcement/providers/config_providers.dar
 import 'package:openlock/src/features/onboarding/providers/permissions_providers.dart';
 import 'package:openlock/src/features/settings/providers/settings_providers.dart';
 import 'package:openlock/src/features/settings/screens/guard_diagnostics_dialog.dart';
+import 'package:openlock/src/features/settings/screens/shizuku_terminal_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -75,6 +76,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             content: Text('Could not open Shizuku. Please try again.')),
       );
     }
+  }
+
+  Future<void> _openTerminal() async {
+    if (!await _reauthenticate(
+        'Enter your PIN to open the Shizuku terminal.')) {
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+          builder: (_) => ShizukuTerminalScreen(
+                reauthenticate: () => _reauthenticate(
+                    'Enter your PIN to resume the Shizuku terminal.'),
+              )),
+    );
   }
 
   Future<void> _setAccessibilityRecovery(bool enabled) async {
@@ -432,6 +448,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   title: 'Shizuku',
                   subtitle: 'Manage the built-in Shizuku service',
                   onTap: _openShizuku,
+                ),
+                SettingsTile(
+                  icon: Icons.terminal_outlined,
+                  title: 'Shizuku terminal',
+                  subtitle: 'Run device-shell commands and view their output',
+                  onTap: _openTerminal,
                 ),
                 toggle(
                   icon: Icons.warning_amber_outlined,
